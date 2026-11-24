@@ -1,0 +1,1 @@
+streamlit>=1.32\nPyMuPDF>=1.23\npandas>=2.0\n
