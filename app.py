@@ -1,196 +1,216 @@
-import io
 import re
 import unicodedata
-import streamlit as st
+import io
 import pandas as pd
+import streamlit as st
 import pymupdf
 
 st.set_page_config(page_title="PDF Survey Sequencer", layout="wide")
 st.title("PDF Survey Sequencer")
-st.caption("Automatically find survey-number pages, export only matched pages, in your master-list order.")
+st.write("Upload the original PDF and paste your survey-number list. The app finds matching survey pages, keeps your list order, and creates a new PDF containing only those pages.")
 
 GUJ_DIGITS = "૦૧૨૩૪૫૬૭૮૯"
 ENG_DIGITS = "0123456789"
-DIGIT_MAP = str.maketrans(GUJ_DIGITS, ENG_DIGITS)
+DIGIT_TRANSLATION = str.maketrans(GUJ_DIGITS, ENG_DIGITS)
 
-def normalize_digits(value: str) -> str:
-    return str(value).translate(DIGIT_MAP)
+def digits_to_english(s):
+    return str(s).translate(DIGIT_TRANSLATION)
 
-def normalize_text(value: str) -> str:
-    value = normalize_digits(value)
-    value = unicodedata.normalize("NFKC", value).lower()
-    value = value.replace("પૈકી", "/")
-    value = value.replace("paiki", "/").replace("p", "/")
-    value = re.sub(r"\s+", "", value)
-    value = re.sub(r"[^a-z0-9/.-]", "", value)
-    value = value.replace(".", "/")
-    value = re.sub(r"/+", "/", value)
-    return value.strip("/")
+def canonical_survey(value):
+    """Normalize Gujarati/English survey number spellings to one comparison key."""
+    s = digits_to_english(value or "")
+    s = unicodedata.normalize("NFKC", s).lower()
+    # Convert common paiki wording to a distinct p marker, not a slash.
+    s = re.sub(r"પૈકી|પૈકીનું|paiki|p\.?a\.?i\.?k\.?i\.?", "p", s, flags=re.I)
+    s = re.sub(r"\bpart\s*[-:]?\s*", "p", s, flags=re.I)
+    s = s.replace("પ", "p")
+    # Remove spaces around separators and punctuation, but preserve slash and p.
+    s = re.sub(r"\s+", "", s)
+    s = re.sub(r"[^0-9p/.-]", "", s)
+    s = s.replace(".", "/")
+    s = re.sub(r"-", "/", s)
+    s = re.sub(r"/+", "/", s)
+    # Normalize forms like 68/1p 2 -> 68/1p2
+    return s.strip("/")
 
-def parse_master(raw: str):
-    # Preserve order and duplicate rows. Accept one survey number per line,
-    # or comma/semicolon-separated entries.
-    lines = []
+def parse_master_list(raw):
+    items=[]
     for line in raw.splitlines():
-        for part in re.split(r"[,;]", line):
-            part = part.strip()
-            if part:
-                lines.append(normalize_digits(part))
-    return lines
+        for item in re.split(r"[,;]", line):
+            item=item.strip()
+            if item:
+                key=canonical_survey(item)
+                if key:
+                    items.append((item, key))
+    return items
 
-SURVEY_LABELS = [
-    "બ્લોક/સરવે (સર્વે) નંબર",
-    "બ્લોક સરવે નંબર",
-    "સરવે નંબર",
-    "સર્વે નંબર",
-    "survey number",
-    "survey no",
-    "block survey",
-    "block number",
+LABEL_PATTERNS = [
+    r"બ્લોક\s*/?\s*સરવે", r"બ્લોક", r"સરવે\s*નંબર", r"સર્વે\s*નંબર",
+    r"survey\s*(?:no\.?|number)", r"block\s*(?:/|and)?\s*survey", r"block\s*(?:no\.?|number)",
+    # Some PDFs have imperfect Gujarati text extraction; retain broad label clues.
+    r"લોક\s*/", r"ƞલોક\s*/", r"survey"
 ]
 
-def extract_survey_field(text: str) -> str:
-    if not text:
-        return ""
-    text = normalize_digits(text)
-    # First prioritize lines around the known Gujarati/English survey-field labels.
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    for i, line in enumerate(lines):
-        low = line.lower()
-        if any(label.lower() in low for label in SURVEY_LABELS):
-            # Survey number may be after colon on the same line or on next line.
-            after = re.split(r"[:：]", line, maxsplit=1)
-            if len(after) == 2 and after[1].strip():
-                return after[1].strip()
-            if i + 1 < len(lines):
-                return lines[i + 1].strip()
-    # Fallback: return full text for exact matching, not a guessed field.
+def get_survey_field(page_text):
+    lines=[line.strip() for line in (page_text or "").splitlines() if line.strip()]
+    label_re=re.compile("|".join(LABEL_PATTERNS), re.I)
+    for idx,line in enumerate(lines):
+        if label_re.search(line):
+            # value written after a colon on label line
+            if ":" in line or "：" in line:
+                parts=re.split(r"[:：]", line, maxsplit=1)
+                if len(parts)>1 and parts[1].strip():
+                    return parts[1].strip()
+            # Otherwise the form commonly places the value on following line(s).
+            for next_line in lines[idx+1:idx+4]:
+                if next_line.strip():
+                    return next_line.strip()
     return ""
 
-def contains_survey(text: str, survey: str) -> bool:
-    norm_page = normalize_text(text)
-    norm_survey = normalize_text(survey)
-    if not norm_survey:
-        return False
-    # Exact normalized token match, with boundaries preventing 12 matching 112.
-    pattern = r"(?<![a-z0-9])" + re.escape(norm_survey) + r"(?![a-z0-9])"
-    return re.search(pattern, norm_page) is not None
+def extract_key_from_field(field):
+    if not field:
+        return ""
+    # field may have surrounding punctuation or a label fragment
+    return canonical_survey(field)
 
-def page_match(page_text: str, survey: str) -> bool:
-    field = extract_survey_field(page_text)
-    # Prefer the labeled field. If it was extracted, require match there.
+def page_survey_key(text):
+    field=get_survey_field(text)
     if field:
-        if contains_survey(field, survey):
-            return True
-        # Some forms place the label and value in separate text blocks;
-        # try matching the extracted field after normalization.
-        return False
-    # If no recognizable field label exists in text, use page text fallback.
-    return contains_survey(page_text, survey)
+        return extract_key_from_field(field), field, "survey field"
+    return "", "", "survey field label not detected"
 
-def scan_pdf(doc, master):
-    page_texts = [page.get_text("text") or "" for page in doc]
-    results = []
-    for row, survey in enumerate(master, start=1):
-        candidates = [i + 1 for i, txt in enumerate(page_texts) if page_match(txt, survey)]
-        results.append({"Master row": row, "Survey number": survey,
-                       "Auto-detected source page(s)": ", ".join(map(str, candidates)) if candidates else "NOT FOUND",
-                       "Select page": candidates[0] if candidates else None,
-                       "Status": "Found" if candidates else "Not found"})
-    return pd.DataFrame(results), page_texts
+def build_page_index(doc):
+    records=[]
+    for i,page in enumerate(doc):
+        text=page.get_text("text") or ""
+        key, field, note=page_survey_key(text)
+        records.append({
+            "PDF page": i+1,
+            "Detected field text": field,
+            "Detected survey key": key,
+            "Detection": note,
+            "Text characters": len(text)
+        })
+    return pd.DataFrame(records)
 
-pdf_file = st.file_uploader("Step 1 — Upload original PDF", type=["pdf"])
-master_raw = st.text_area(
-    "Step 2 — Paste survey numbers in the exact required order (one per line)",
-    height=220,
+def create_output_pdf(doc, ordered_pages):
+    out=pymupdf.open()
+    toc=[]
+    for output_page, (master_row, raw_survey, key, source_page) in enumerate(ordered_pages, start=1):
+        out.insert_pdf(doc, from_page=source_page-1, to_page=source_page-1)
+        toc.append([1, f"{raw_survey} (source page {source_page})", output_page])
+    if toc:
+        out.set_toc(toc)
+    data=out.tobytes(garbage=4, deflate=True)
+    out.close()
+    return data
+
+pdf_upload=st.file_uploader("Step 1 — Upload original PDF", type=["pdf"])
+master_text=st.text_area(
+    "Step 2 — Paste survey numbers in your required sequence (one per line; comma-separated is also accepted)",
+    height=230,
     placeholder="25\n27\n30\n31\n44\n52\n60"
 )
-master = parse_master(master_raw)
+master=parse_master_list(master_text)
 
-if pdf_file and master:
+if pdf_upload and master:
     try:
-        original_bytes = pdf_file.getvalue()
-        doc = pymupdf.open(stream=original_bytes, filetype="pdf")
-        st.success(f"Original PDF: {len(doc)} pages | Master list: {len(master)} entries")
-        with st.spinner("Scanning PDF text and matching survey numbers..."):
-            auto_df, page_texts = scan_pdf(doc, master)
+        original_bytes=pdf_upload.getvalue()
+        pdf=pymupdf.open(stream=original_bytes, filetype="pdf")
+        st.info(f"PDF pages: {len(pdf)} | List entries: {len(master)} (duplicates/order preserved)")
+        with st.spinner("Reading survey-number field from each PDF page..."):
+            page_index=build_page_index(pdf)
 
-        found_count = int((auto_df["Status"] == "Found").sum())
-        st.write(f"**Automatically found:** {found_count} / {len(master)} master-list entries")
-        st.dataframe(auto_df[["Master row", "Survey number", "Auto-detected source page(s)", "Status"]],
-                     hide_index=True, use_container_width=True)
+        # Map normalized survey field key -> source page(s); use first page by default,
+        # matching the user's prior sequencing workflow. Duplicate master rows remain duplicates.
+        key_to_pages={}
+        for _, row in page_index.iterrows():
+            k=row["Detected survey key"]
+            if k:
+                key_to_pages.setdefault(k, []).append(int(row["PDF page"]))
 
-        st.warning(
-            "Automatic matching works best when PDF pages contain selectable text. "
-            "If the PDF is scanned/image-only, pages may show NOT FOUND because Gujarati OCR is not included."
-        )
+        matches=[]
+        for row_number,(raw,key) in enumerate(master, start=1):
+            pages=key_to_pages.get(key,[])
+            matches.append({
+                "List row": row_number,
+                "Survey number (as pasted)": raw,
+                "Normalized key": key,
+                "Matching source PDF page(s)": ", ".join(map(str,pages)) if pages else "NOT FOUND",
+                "Default source page": pages[0] if pages else None,
+                "Status": "Found" if pages else "Not found"
+            })
+        match_df=pd.DataFrame(matches)
+        found_rows=int((match_df["Status"]=="Found").sum())
+        st.subheader("Step 3 — Matching report")
+        st.write(f"**Matched list entries:** {found_rows} / {len(master)}")
+        st.dataframe(match_df, hide_index=True, use_container_width=True)
 
-        st.subheader("Step 3 — Review/adjust page selection (optional)")
-        page_options = [None] + list(range(1, len(doc) + 1))
-        review = auto_df[["Master row", "Survey number", "Select page"]].copy()
-        review["Select page"] = pd.to_numeric(review["Select page"], errors="coerce")
-        edited = st.data_editor(
+        with st.expander("See detected survey field from every PDF page"):
+            st.dataframe(page_index, hide_index=True, use_container_width=True)
+
+        st.caption("The app uses the first matching source page for each list item by default. Repeated survey numbers in your list are repeated in the output. If more than one source page has the same survey key, choose the correct page below.")
+        st.subheader("Step 4 — Review page choices (only if needed)")
+        options=[None]+list(range(1,len(pdf)+1))
+        review=match_df[["List row","Survey number (as pasted)","Default source page"]].copy()
+        review["Default source page"]=pd.to_numeric(review["Default source page"], errors="coerce")
+        edited=st.data_editor(
             review,
-            key="review_table",
             hide_index=True,
             use_container_width=True,
             num_rows="fixed",
+            key="page_review_v2",
             column_config={
-                "Master row": st.column_config.NumberColumn(disabled=True),
-                "Survey number": st.column_config.TextColumn(disabled=True),
-                "Select page": st.column_config.NumberColumn(
-                    min_value=1, max_value=len(doc), step=1,
-                    help="If a survey number was not found or the detected page is wrong, enter the correct source PDF page number."
+                "List row":st.column_config.NumberColumn(disabled=True),
+                "Survey number (as pasted)":st.column_config.TextColumn(disabled=True),
+                "Default source page":st.column_config.NumberColumn(
+                    min_value=1,max_value=len(pdf),step=1,
+                    help="Keep detected page or enter the correct source page. Leave blank to skip this survey number."
                 )
             }
         )
 
-        selected = []
-        missing = []
-        for row_idx, survey in enumerate(master):
-            raw_page = edited.iloc[row_idx]["Select page"]
-            page_no = None if pd.isna(raw_page) else int(raw_page)
-            if page_no is not None and 1 <= page_no <= len(doc):
-                selected.append((row_idx + 1, survey, page_no))
+        final_rows=[]
+        skipped=[]
+        for idx,(raw,key) in enumerate(master):
+            value=edited.iloc[idx]["Default source page"]
+            page_num=None if pd.isna(value) else int(value)
+            if page_num is not None and 1<=page_num<=len(pdf):
+                final_rows.append((idx+1,raw,key,page_num))
             else:
-                missing.append((row_idx + 1, survey))
-
-        st.caption("Only selected pages are exported. Pages not selected are omitted. Output follows the master list order; duplicate list entries are preserved.")
-        if missing:
-            with st.expander(f"Skipped entries ({len(missing)})"):
-                st.dataframe(pd.DataFrame(missing, columns=["Master row", "Survey number"]), hide_index=True)
-
-        st.subheader("Step 4 — Download final PDF")
-        if selected:
-            output = pymupdf.open()
-            for _, _, page_no in selected:
-                output.insert_pdf(doc, from_page=page_no - 1, to_page=page_no - 1)
-            pdf_out = output.tobytes(garbage=4, deflate=True)
-            output.close()
+                skipped.append((idx+1,raw))
+        st.subheader("Step 5 — Download the final sequenced PDF")
+        if final_rows:
+            final_pdf=create_output_pdf(pdf,final_rows)
             st.download_button(
-                "⬇️ Download Final Sequenced PDF",
-                data=pdf_out,
-                file_name="survey_numbers_in_requested_sequence.pdf",
+                "⬇️ Download FINAL Sequenced PDF",
+                data=final_pdf,
+                file_name="survey_pages_in_master_sequence.pdf",
                 mime="application/pdf",
                 type="primary",
                 use_container_width=True
             )
-            st.success(f"Ready: {len(selected)} pages in the requested order. Extra/unselected pages removed.")
+            st.success(f"Final PDF ready: {len(final_rows)} pages. Only selected/matched pages are included, in your list order.")
         else:
-            st.info("No pages selected/found yet. Select source page numbers in the review table to generate the final PDF.")
+            st.warning("No matching pages selected. The final PDF will be available after at least one page is matched or selected.")
 
-        audit = pd.DataFrame({
-            "Master row": range(1, len(master) + 1),
-            "Survey number": master,
-            "Auto detected page(s)": auto_df["Auto-detected source page(s)"],
-            "Final selected page": edited["Select page"],
-        })
-        st.download_button("Download matching report (CSV)", audit.to_csv(index=False).encode("utf-8-sig"),
-                          "survey_match_report.csv", "text/csv")
-        doc.close()
-    except Exception as err:
-        st.error(f"PDF processing error: {err}")
-elif pdf_file and not master:
-    st.info("Paste your survey-number list to begin matching.")
+        if skipped:
+            st.warning(f"{len(skipped)} list item(s) will be skipped (not found or no page selected).")
+            with st.expander("Skipped survey numbers"):
+                st.dataframe(pd.DataFrame(skipped,columns=["List row","Survey number"]),hide_index=True)
+
+        # CSV is optional audit only; the main deliverable is the PDF.
+        report=match_df.copy()
+        report["Final source page"]=[None if pd.isna(x) else int(x) for x in edited["Default source page"]]
+        st.download_button("Download matching report (optional CSV)", report.to_csv(index=False).encode("utf-8-sig"),
+                          "survey_matching_report.csv", "text/csv")
+        pdf.close()
+    except Exception as e:
+        st.error(f"Could not process this PDF: {e}")
+elif pdf_upload and not master:
+    st.info("Paste your survey-number list to start matching.")
 else:
-    st.info("Upload a PDF and paste the survey-number sequence to begin.")
+    st.info("Upload a PDF and paste the list in your required sequence.")
+
+st.divider()
+st.caption("Note: Automatic detection requires text-readable PDF pages. Image-only/scanned pages need OCR; this build does not silently guess survey numbers from unrelated numbers on a page.")

@@ -1,19 +1,24 @@
-# PDF Survey Sequencer
+# PDF Survey Sequencer — Updated Matching Workflow
 
-## What this app does
-1. Upload a Gujarati land-record PDF.
-2. Paste your survey-number master list in the exact desired order.
-3. The app scans page text and tries to identify survey-number pages, prioritizing the labeled survey field.
-4. Review or correct page selections if needed.
-5. Download a new PDF containing only selected pages, in the master-list order. Extra/unselected pages are omitted.
+This build follows the intended sequence-export workflow:
+- Upload the source PDF.
+- Paste survey numbers in the exact sequence desired (one per line or comma/semicolon-separated).
+- The app reads each page's survey-number field and creates an index.
+- It matches the master list to page survey keys.
+- It exports a PDF containing only matched/selected pages, in the master-list order.
+- Extra pages and non-matching survey pages are excluded.
+- Duplicate survey numbers in the master list remain duplicated in the final output.
+- Optional CSV is only a matching audit; PDF is the main output.
 
-## Important limitation
-Automatic matching requires searchable/selectable PDF text. Scanned image-only pages need Gujarati OCR, which is not bundled in this lightweight Streamlit deployment. Such entries appear as NOT FOUND and can be assigned a page number manually in the review table.
+## Matching notes
+- Gujarati digits are converted to Arabic digits for matching.
+- Common `પૈકી` / `paiki` notation is normalized to a `p` marker.
+- The app prioritizes the survey-number field labels and value following the label.
+- If the PDF text extraction does not expose the survey field, the item may be `NOT FOUND`. This build does not use OCR and does not guess from random page numbers.
+- When a survey number occurs on multiple source pages, the first is selected by default; the review table allows selecting the correct page.
+- Unmatched entries are skipped and shown in the skipped list.
 
-## Deploy
-Upload/replace these files in the GitHub repository used by Streamlit Cloud:
-- `app.py`
-- `requirements.txt`
-- `packages.txt` (empty)
+## Deploy on Streamlit Cloud
+Replace the files in your GitHub repository with the files in this ZIP. Ensure the Streamlit app settings point to the correct repo, branch, and `app.py`, then commit/push and reboot the app.
 
-Then commit and push. In Streamlit Cloud, confirm the app is connected to the correct repository, branch, and `app.py`, then reboot/redeploy.
+Files: `app.py`, `requirements.txt`, `packages.txt` (empty), `README.md`.
