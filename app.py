@@ -1,6 +1,5 @@
 import re
-from collections import defaultdict
-
+import hashlib
 import pandas as pd
 import streamlit as st
 
@@ -10,8 +9,8 @@ except ImportError:
     import fitz
 
 st.set_page_config(page_title="PDF Survey Sequencer", page_icon="📄", layout="wide")
-st.title("📄 PDF Survey Sequencer — Master List Order")
-st.write("Master list order is the authority. The app will NOT sort your list numerically. Review page matches, then export pages in the exact order you pasted.")
+st.title("📄 PDF Survey Sequencer — Exact Master List Order")
+st.write("The pasted master list controls the output sequence. The app does not sort survey numbers numerically.")
 
 GUJ_DIGITS = str.maketrans("૦૧૨૩૪૫૬૭૮૯", "0123456789")
 ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
@@ -21,7 +20,6 @@ EN_TO_GUJ = str.maketrans("0123456789", "૦૧૨૩૪૫૬૭૮૯")
 def normalize(s):
     s = str(s or "").translate(GUJ_DIGITS).translate(ARABIC_DIGITS).strip()
     s = re.sub(r"\s+", "", s)
-    # Keep dots/slashes as meaningful survey-number separators.
     return s
 
 
@@ -30,124 +28,142 @@ def to_guj(s):
 
 
 def parse_master(raw):
-    # Preserve duplicates and the exact pasted order. Do not sort or deduplicate.
+    # Preserve every item in the user's original order, including duplicates.
     return [normalize(x) for x in re.split(r"[,;\n]+", raw or "") if normalize(x)]
 
 
-def extract_page_text(page):
+def page_text(page):
     try:
         return page.get_text("text") or ""
     except Exception:
         return ""
 
 
-def candidate_numbers(text):
+def nums_in_text(text):
     text = text.translate(GUJ_DIGITS).translate(ARABIC_DIGITS)
-    # Include dotted/slashed/hyphenated survey-number forms, but these are only suggestions.
-    return list(dict.fromkeys(normalize(x) for x in re.findall(r"(?<![\w])\d+(?:[./-]\d+)*(?![\w])", text) if normalize(x)))
+    return [normalize(x) for x in re.findall(r"(?<![\w])\d+(?:[./-]\d+)*(?![\w])", text) if normalize(x)]
+
+
+def labeled_survey_numbers(text):
+    """Only collect numbers from lines containing survey/block label words."""
+    found = []
+    for line in text.splitlines():
+        low = line.lower()
+        if any(label in low for label in ("survey", "block", "સર્વે", "સરવે", "બ્લોક")):
+            found.extend(nums_in_text(line))
+    return list(dict.fromkeys(found))
 
 
 def render_page(page):
-    return page.get_pixmap(matrix=fitz.Matrix(1.2, 1.2), alpha=False).tobytes("png")
+    return page.get_pixmap(matrix=fitz.Matrix(1.15, 1.15), alpha=False).tobytes("png")
+
 
 pdf_file = st.file_uploader("Upload source PDF", type=["pdf"])
-master_text = st.text_area("Paste survey-number master list (one item per line; exact order will be preserved)", height=250,
-                           placeholder="૨\n૩\n૫૬\n૩૭૬\n...\n૨૨૦૬")
+master_text = st.text_area("Paste master survey list (one item per line; order preserved)", height=250,
+                           placeholder="૨\n૩\n૫૬\n૩૭૬\n...")
 master = parse_master(master_text)
-
 if master:
-    st.caption(f"Master list entries: {len(master)}. Duplicates are preserved. Numeric sorting is disabled.")
+    st.caption(f"Master list entries: {len(master)} — order and duplicate entries preserved.")
 
-if pdf_file and master and st.button("Analyze PDF and suggest matches", type="primary"):
+if pdf_file and master and st.button("Analyze PDF", type="primary"):
     try:
         doc = fitz.open(stream=pdf_file.getvalue(), filetype="pdf")
     except Exception as e:
-        st.error(f"PDF open error: {e}")
+        st.error(f"Could not open PDF: {e}")
         st.stop()
-    page_info = []
-    for i, p in enumerate(doc):
-        txt = extract_page_text(p)
-        nums = candidate_numbers(txt)
-        # Suggest only exact master-list matches; still require the user to review.
-        found = [n for n in master if n in nums]
-        page_info.append({"page": i + 1, "text": txt[:2000], "candidates": nums, "suggested": found})
-    st.session_state.page_info = page_info
+    pages = []
+    for i, page in enumerate(doc):
+        text = page_text(page)
+        label_nums = labeled_survey_numbers(text)
+        all_nums = nums_in_text(text)
+        pages.append({"page": i + 1, "text": text[:3000], "labeled": label_nums, "all_nums": all_nums})
+    doc.close()
+    st.session_state.pages = pages
     st.session_state.pdf_bytes = pdf_file.getvalue()
     st.session_state.master = master
-    st.session_state.file_name = pdf_file.name
-    st.success("Analysis finished. Suggestions are not treated as verified; review every assignment below.")
+    st.session_state.source_name = pdf_file.name
+    st.session_state.pop("export_pdf", None)
+    st.success("Analysis done. Suggestions are based only on lines containing survey/block labels. Please verify with page previews.")
 
-if "page_info" in st.session_state:
-    pages = st.session_state.page_info
+if "pages" in st.session_state:
+    pages = st.session_state.pages
     master = st.session_state.master
     pdf_bytes = st.session_state.pdf_bytes
-    st.subheader("Assign source PDF page to each master-list entry")
-    st.warning("Important: numbers detected anywhere on a page can be unrelated (owner/record numbers, old survey numbers, etc.). The suggested page is only a guess. Select the correct page using the page preview. The final PDF follows the master-list rows top-to-bottom exactly.")
-    page_options = ["— Not mapped —"] + [f"Page {p['page']}" for p in pages]
-    # Build initial suggestion mapping by exact candidate match, using first matching page.
-    suggestion = {}
-    for item in master:
-        matching_pages = [p['page'] for p in pages if item in p['candidates']]
-        suggestion[item] = matching_pages[0] if matching_pages else None
+    page_choices = ["— Not mapped —"] + [f"Page {p['page']}" for p in pages]
 
-    mapping_rows = []
-    for i, item in enumerate(master):
-        opts = page_options
-        suggested_page = suggestion.get(item)
-        default_idx = (suggested_page if suggested_page else 0)
-        mapping_rows.append({"List position": i + 1, "Master survey no.": to_guj(item), "Page selection": page_options[default_idx] if default_idx else page_options[0]})
+    st.subheader("Page mapping — one row per master-list item")
+    st.info("A suggestion is made only when the survey number appears on a line containing Survey/Block label text. If Gujarati text extraction is unreadable or no label is detected, the suggestion stays blank. Review every row and preview the source page.")
 
-    df = pd.DataFrame(mapping_rows)
-    edited = st.data_editor(df, hide_index=True, num_rows="fixed", width="stretch",
-        column_config={
-            "List position": st.column_config.NumberColumn(disabled=True),
-            "Master survey no.": st.column_config.TextColumn(disabled=True),
-            "Page selection": st.column_config.SelectboxColumn(options=page_options, required=True),
+    rows = []
+    for pos, survey in enumerate(master, start=1):
+        exact_pages = [p["page"] for p in pages if survey in p["labeled"]]
+        anywhere_pages = [p["page"] for p in pages if survey in p["all_nums"]]
+        suggest = exact_pages[0] if exact_pages else None
+        rows.append({
+            "List position": pos,
+            "Survey no.": to_guj(survey),
+            "Label match pages": ", ".join(map(str, exact_pages)) if exact_pages else "No labeled match",
+            "Other text match pages": ", ".join(map(str, anywhere_pages)) if anywhere_pages and not exact_pages else "",
+            "Page selection": page_choices[suggest] if suggest else page_choices[0],
         })
 
-    st.subheader("Page preview for checking")
-    preview_page = st.selectbox("View source page", [p["page"] for p in pages], format_func=lambda x: f"Page {x}")
-    doc_preview = fitz.open(stream=pdf_bytes, filetype="pdf")
-    st.image(render_page(doc_preview[preview_page - 1]), caption=f"Source PDF page {preview_page}")
-    st.text_area("Extracted text (may be garbled in some Gujarati PDFs)", pages[preview_page - 1]["text"], height=150, disabled=True)
-    doc_preview.close()
+    df = pd.DataFrame(rows)
+    edited = st.data_editor(
+        df,
+        hide_index=True,
+        num_rows="fixed",
+        width="stretch",
+        column_config={
+            "List position": st.column_config.NumberColumn(disabled=True),
+            "Survey no.": st.column_config.TextColumn(disabled=True),
+            "Label match pages": st.column_config.TextColumn(disabled=True),
+            "Other text match pages": st.column_config.TextColumn(disabled=True),
+            "Page selection": st.column_config.SelectboxColumn(options=page_choices, required=True),
+        },
+        key="mapping_editor_" + hashlib.sha1((st.session_state.source_name + "|" + "|".join(master)).encode()).hexdigest()[:12],
+    )
 
-    final_page_order = []
-    missing_entries = []
+    st.subheader("Source page preview")
+    preview = st.selectbox("Choose source PDF page to inspect", [p["page"] for p in pages], key="preview_select")
+    preview_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    st.image(render_page(preview_doc[preview - 1]), caption=f"Original source page {preview}")
+    st.text_area("Extracted page text", pages[preview - 1]["text"], height=160, disabled=True)
+    preview_doc.close()
+
+    ordered_pages, unmapped = [], []
     for _, row in edited.iterrows():
-        choice = row["Page selection"]
-        if choice == "— Not mapped —":
-            missing_entries.append((int(row["List position"]), row["Master survey no."]))
+        sel = row["Page selection"]
+        if sel == page_choices[0]:
+            unmapped.append((int(row["List position"]), row["Survey no."]))
         else:
-            final_page_order.append(int(choice.replace("Page ", "")))
+            ordered_pages.append(int(sel.replace("Page ", "")))
 
-    st.subheader("Sequence check")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Master-list rows", len(master))
-    c2.metric("Mapped rows", len(final_page_order))
-    c3.metric("Unmapped rows", len(missing_entries))
-    if missing_entries:
-        st.warning("Some entries are unmapped. You can still create a PDF using mapped rows only; unmapped rows will be skipped. Map the remaining entries if you need a complete output.")
-        st.dataframe(pd.DataFrame(missing_entries, columns=["List position", "Missing survey no."]), hide_index=True)
+    st.subheader("Export status")
+    a, b, c = st.columns(3)
+    a.metric("Master list rows", len(master))
+    b.metric("Mapped rows", len(ordered_pages))
+    c.metric("Unmapped rows", len(unmapped))
+    if unmapped:
+        st.warning("Unmapped rows will be skipped. Export is available for mapped rows only; the sequence follows the master list order.")
+        st.dataframe(pd.DataFrame(unmapped, columns=["List position", "Unmapped survey no."]), hide_index=True)
     else:
-        st.success("All rows mapped. Export will follow the master list from first row to last row exactly.")
+        st.success("All master-list rows have a page selected.")
 
-    # Export mapped rows even when some are missing; preserve order and allow repeated source pages.
-    if st.button("Create PDF from mapped rows (master-list order)", type="primary"):
+    if st.button("Create PDF from selected pages in master-list order", type="primary", disabled=(len(ordered_pages) == 0)):
         src = fitz.open(stream=pdf_bytes, filetype="pdf")
         out = fitz.open()
-        for pno in final_page_order:
-            out.insert_pdf(src, from_page=pno - 1, to_page=pno - 1)
-        result = out.tobytes(garbage=4, deflate=True)
-        out.close(); src.close()
-        st.session_state.output_pdf = result
-        st.session_state.output_page_order = final_page_order
-        st.success(f"PDF created with {len(final_page_order)} mapped rows. {len(missing_entries)} unmapped rows were skipped. Order follows the master list; no numeric sorting was applied.")
+        for page_no in ordered_pages:
+            out.insert_pdf(src, from_page=page_no - 1, to_page=page_no - 1)
+        st.session_state.export_pdf = out.tobytes(garbage=4, deflate=True)
+        st.session_state.export_pages = ordered_pages
+        out.close()
+        src.close()
+        st.success(f"PDF generated: {len(ordered_pages)} pages in pasted master-list order. Skipped {len(unmapped)} unmapped rows.")
 
-    if "output_pdf" in st.session_state:
-        st.download_button("Download sequenced PDF", st.session_state.output_pdf,
-                          file_name="PDF_exact_master_list_sequence.pdf", mime="application/pdf")
-        st.download_button("Download mapping audit CSV", edited.to_csv(index=False).encode("utf-8-sig"),
-                          file_name="master_list_page_mapping.csv", mime="text/csv")
+    if "export_pdf" in st.session_state:
+        st.download_button("⬇️ Download sequenced PDF", st.session_state.export_pdf,
+                          file_name="survey_pages_master_list_order.pdf", mime="application/pdf")
+        st.download_button("⬇️ Download mapping audit CSV", edited.to_csv(index=False).encode("utf-8-sig"),
+                          file_name="survey_page_mapping_audit.csv", mime="text/csv")
 else:
-    st.info("Upload PDF, paste the master list, then analyze. Page matches must be reviewed before export to prevent incorrect sequencing.")
+    st.info("Upload the PDF, paste the master list, and click Analyze PDF. Then review mappings and create the output PDF.")
