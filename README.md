@@ -1,12 +1,15 @@
-# PDF Survey Sequencer (OCR fallback)
+# Gujarati PDF Survey Sequencer — Field-focused OCR
 
+This Streamlit app scans specifically the Gujarati field `બ્લોક/સરવે નંબર :` (including close variants) rather than searching arbitrary numbers on the page.
+
+## Workflow
 1. Upload the original PDF.
-2. Paste the requested survey sequence, one per line.
-3. The app reads embedded PDF text first. If no survey value is detected on a page, it runs Gujarati + English Tesseract OCR (if installed).
-4. Pages matching the requested survey list are assembled in the exact sequence. Unrequested pages are omitted.
-5. Download the sequenced PDF. CSV is optional.
+2. Paste survey numbers in the desired output sequence. Gujarati or Arabic digits are accepted; order and duplicate requests are preserved.
+3. The app reads embedded PDF text, then if needed uses Gujarati+English Tesseract OCR at high resolution and multiple page segmentation modes. It also retries upper/middle/lower page regions.
+4. It matches the detected value of the target field only, creates a new PDF in the exact requested sequence, and omits unmatched/extra pages.
+5. Diagnostics show each page's detected survey field, method, and OCR preview.
 
-## Deploy to Streamlit Community Cloud
-Replace `app.py`, `requirements.txt`, and `packages.txt` in the configured GitHub repository/branch. Commit, then redeploy/reboot the Streamlit app. Ensure `packages.txt` is at repository root and contains the Tesseract packages listed here.
+## Streamlit Cloud
+Replace `app.py`, `requirements.txt`, and `packages.txt` in your configured GitHub repository and commit. Ensure Streamlit Cloud is deploying the intended branch and main file. Reboot after deployment.
 
-Note: OCR accuracy varies with scan quality, print layout, and Gujarati recognition. Check the detection-details table if any requested survey number is missing. The code has been syntax-checked; OCR matching should be validated on your actual PDF before relying on it.
+`packages.txt` installs Tesseract with Gujarati (`guj`) and English (`eng`) language data. OCR accuracy depends on scan quality and form layout; no sample PDF was provided for validation.
