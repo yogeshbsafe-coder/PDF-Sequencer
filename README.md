@@ -1,15 +1,11 @@
-# PDF Survey Sequencer
+# PDF Survey Sequencer (Automatic PDF generation)
 
-This Streamlit tool aims to create a separate PDF with only survey-number pages, ordered exactly as the pasted survey list.
+Streamlit app that extracts survey identifiers from PDF text around Gujarati/English survey-number labels, matches them to the user's ordered list, and outputs a new PDF containing only matching pages in that order. Extra pages are excluded. Duplicate list entries are preserved when separate matching source pages exist.
 
-1. Upload source PDF.
-2. Paste survey numbers one per line.
-3. Automatic field matching scans searchable text around Gujarati/English survey-number labels.
-4. Review/change original source-page selections for unmatched or incorrect detections.
-5. Download the final PDF. Only selected pages are included, in the exact master list order. Other pages are excluded.
+## Deploy
+1. Replace `app.py`, `requirements.txt`, `packages.txt` in your GitHub repo.
+2. Commit changes and ensure Streamlit Cloud points to the correct repo, branch, and `app.py`.
+3. Reboot/redeploy.
 
-Master list order and duplicate entries are preserved.
-
-**OCR limitation:** Scanned/image-only PDFs are not OCRed by this version. If searchable text is absent, auto-match may find zero; use review page-number selections, or OCR the PDF first.
-
-Deploy by replacing app.py, requirements.txt, packages.txt (empty) and README.md in the GitHub repo connected to Streamlit Cloud, commit, then redeploy.
+## Limitations
+Text-based PDFs are supported. Image-only/scanned PDFs require OCR, which is not included in this package. Diagnostics show what survey identifiers were detected per page. Matching uses exact normalized survey identifiers.
