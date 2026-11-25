@@ -1,1 +1,5 @@
-streamlit>=1.32\nPyMuPDF>=1.23\npandas>=2.0\n
+
+streamlit>=1.32
+PyMuPDF>=1.23
+pandas>=2.0
+  
