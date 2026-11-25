@@ -1,28 +1,20 @@
-# PDF Survey Sequencer & Survey Number Editor
+# PDF Survey Sequencer & Editor
 
-Streamlit app to map PDF pages to a master survey-number sequence, review/edit page mappings, optionally replace a selectable printed survey number on a page, and export the final PDF in master-list order.
+Streamlit application to upload a PDF, enter a master survey-number list in the desired order, review/edit page mappings, and export a reordered PDF. Optional correction fields attempt to replace old survey-number text with a new value on pages where the old value is selectable PDF text.
 
-## Features
-- Paste a survey-number list in Gujarati or English digits; line breaks, commas and semicolons are supported.
-- Analyze page text and optionally OCR pages with little/no selectable text.
-- Editable page-to-survey-number mapping.
-- Show missing list entries, extra mapped numbers, and skipped pages.
-- Preview source pages and extracted text.
-- Optional per-page printed-number replacement: enter the old searchable number and the replacement. The app attempts replacement only when the old value is selectable text in the PDF; scanned image text cannot be edited by this method and is reported.
-- Export reordered PDF and CSV correction report.
+## Files
+- `app.py` — application
+- `requirements.txt` — Python dependencies
+- `packages.txt` — system package list for Streamlit Cloud
 
-## Run locally
-1. Install Python 3.10+.
-2. Install packages: `pip install -r requirements.txt`
-3. Install Tesseract OCR and Gujarati language data if OCR is desired. On Debian/Ubuntu: `sudo apt-get install tesseract-ocr tesseract-ocr-gu`.
-4. Run: `streamlit run app.py`
+## Deploy on Streamlit Cloud
+1. Replace the files in your GitHub repository with these files.
+2. Set the main file path to `app.py`.
+3. Commit and push to the deployment branch.
+4. Streamlit Cloud will redeploy.
 
-## Streamlit Cloud deployment
-Upload `app.py`, `requirements.txt`, `packages.txt`, and `README.md` to your GitHub repository. Select the `main` branch and `app.py` as the app entry point.
+## OCR behavior
+Only the basic `tesseract-ocr` package is required. Gujarati OCR language data is optional and may not be available in every deployment image. The app checks the installed Tesseract languages at runtime and uses Gujarati+English if Gujarati language data is present; otherwise it falls back to English OCR. OCR can be disabled in the app.
 
-
-## Important accuracy / editing notes
-- Detection is a suggestion. Verify every page mapping before exporting.
-- `123`, `123/1`, and `123.001` are treated as distinct values.
-- Replacement uses searchable PDF text, not OCR coordinates. For scanned PDFs or unusual text layout, the correction may not be applied. Always check the output PDF visually.
-- When the same source page maps to more than one requested number, that page is included only once in the final PDF.
+## Accuracy note
+Detection is a suggestion and may mistake dates, areas, or other numbers for survey numbers. Review and correct the page mapping before exporting. Automatic number replacement is limited to selectable text; scanned/image text requires manual editing in a PDF editor. Always inspect the final PDF before using it officially.
