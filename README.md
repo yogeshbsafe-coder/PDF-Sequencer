@@ -1,13 +1,15 @@
-# PDF Survey Sequencer (v3)
+# PDF Survey Sequencer
 
-Upload a searchable Gujarati land-record PDF and paste survey numbers in the exact output order.
+This Streamlit tool aims to create a separate PDF with only survey-number pages, ordered exactly as the pasted survey list.
 
-- Matches page survey field candidates (Gujarati and English label variants, including imperfect text-extraction variants).
-- Keeps master list order and duplicates.
-- Exports only selected/matched pages; extra pages are omitted.
-- Includes an editable source-page column for manual corrections.
-- Matching diagnostic table shows extracted field candidates page-by-page.
+1. Upload source PDF.
+2. Paste survey numbers one per line.
+3. Automatic field matching scans searchable text around Gujarati/English survey-number labels.
+4. Review/change original source-page selections for unmatched or incorrect detections.
+5. Download the final PDF. Only selected pages are included, in the exact master list order. Other pages are excluded.
 
-**Scanned/image-only PDF limitation:** Gujarati OCR is not bundled. If PDF text extraction is empty or does not contain field text, automatic matching cannot detect it; use manual source-page mapping or OCR-convert the source PDF first.
+Master list order and duplicate entries are preserved.
 
-Deploy by replacing app.py, requirements.txt, packages.txt (empty), and README.md in your connected GitHub repository, committing, and redeploying/rebooting Streamlit Cloud.
+**OCR limitation:** Scanned/image-only PDFs are not OCRed by this version. If searchable text is absent, auto-match may find zero; use review page-number selections, or OCR the PDF first.
+
+Deploy by replacing app.py, requirements.txt, packages.txt (empty) and README.md in the GitHub repo connected to Streamlit Cloud, commit, then redeploy.
