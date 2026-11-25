@@ -163,21 +163,40 @@ if "pages" in st.session_state:
     else:
         st.warning("No source pages are mapped yet. Select a page in at least one Page selection row to enable the PDF download.")
 
-    # Keep download controls visible, even when no pages are mapped (disabled in that case).
-    st.download_button(
-        "⬇️ Download sequenced PDF",
-        data=export_bytes,
-        file_name="survey_pages_master_list_order.pdf",
-        mime="application/pdf",
-        disabled=(len(ordered_pages) == 0),
-        help="Downloads only mapped pages, ordered by your master list. Unmapped entries are skipped."
-    )
-    st.download_button(
-        "⬇️ Download mapping audit CSV",
-        data=edited.to_csv(index=False).encode("utf-8-sig"),
-        file_name="survey_page_mapping_audit.csv",
-        mime="text/csv"
-    )
+    # Put the PDF control first and make its visibility explicit.
+    st.markdown("### 📥 Downloads")
+    if ordered_pages:
+        pdf_col, csv_col = st.columns([2, 1])
+        with pdf_col:
+            st.download_button(
+                label=f"⬇️ DOWNLOAD SEQUENCED PDF ({len(ordered_pages)} pages)",
+                data=export_bytes,
+                file_name="survey_pages_master_list_order.pdf",
+                mime="application/pdf",
+                key="download_sequenced_pdf",
+                type="primary",
+                use_container_width=True,
+                help="Downloads mapped source pages in the exact pasted master-list order."
+            )
+        with csv_col:
+            st.download_button(
+                label="⬇️ Download mapping CSV",
+                data=edited.to_csv(index=False).encode("utf-8-sig"),
+                file_name="survey_page_mapping_audit.csv",
+                mime="text/csv",
+                key="download_mapping_csv",
+                use_container_width=True
+            )
+    else:
+        st.error("PDF export is not ready: select a source page for at least one master-list row above. The PDF download button will appear here as soon as one row is mapped.")
+        st.download_button(
+            label="⬇️ Download mapping CSV",
+            data=edited.to_csv(index=False).encode("utf-8-sig"),
+            file_name="survey_page_mapping_audit.csv",
+            mime="text/csv",
+            key="download_mapping_csv_no_pdf",
+            use_container_width=True
+        )
 
 else:
     st.info("Upload the PDF, paste the master list, and click Analyze PDF. Then review mappings and create the output PDF.")
