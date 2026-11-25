@@ -192,7 +192,16 @@ if pdf_upload and master:
             )
             st.success(f"Final PDF ready: {len(final_rows)} pages. Only selected/matched pages are included, in your list order.")
         else:
-            st.warning("No matching pages selected. The final PDF will be available after at least one page is matched or selected.")
+            st.warning("No matching pages selected yet. The PDF download button is shown below but disabled until at least one page is matched or selected.")
+            st.download_button(
+                "⬇️ Download FINAL Sequenced PDF (waiting for matches)",
+                data=b"",
+                file_name="survey_pages_in_master_sequence.pdf",
+                mime="application/pdf",
+                type="primary",
+                use_container_width=True,
+                disabled=True
+            )
 
         if skipped:
             st.warning(f"{len(skipped)} list item(s) will be skipped (not found or no page selected).")
@@ -209,6 +218,15 @@ if pdf_upload and master:
         st.error(f"Could not process this PDF: {e}")
 elif pdf_upload and not master:
     st.info("Paste your survey-number list to start matching.")
+    st.download_button(
+        "⬇️ Download FINAL Sequenced PDF (paste list first)",
+        data=b"",
+        file_name="survey_pages_in_master_sequence.pdf",
+        mime="application/pdf",
+        type="primary",
+        use_container_width=True,
+        disabled=True
+    )
 else:
     st.info("Upload a PDF and paste the list in your required sequence.")
 
