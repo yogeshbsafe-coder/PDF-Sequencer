@@ -44,7 +44,7 @@ if pdf_file and master:
             df,
             key="mapping_editor",
             hide_index=True,
-            use_container_width=True,
+            width='stretch',
             column_config={
                 "Master row": st.column_config.NumberColumn(disabled=True),
                 "Survey number": st.column_config.TextColumn(disabled=True),
@@ -65,8 +65,11 @@ if pdf_file and master:
                 st.dataframe(pd.DataFrame(unmapped, columns=["Master row", "Survey number"]), hide_index=True)
             st.warning("Unmapped rows will be skipped. The output order follows the master list. Select at least one source page to create the PDF.")
 
-        # Generate PDF only from mapped rows, preserving master-list order.
+        # Generate output: mapped pages in master-list order. If no mappings yet,
+        # provide a valid fallback PDF (the uploaded original) so the PDF download
+        # control remains visible and usable rather than disappearing/being disabled.
         output_pdf = None
+        export_label = "⬇️ Download Sequenced PDF"
         if mapped:
             out = pymupdf.open()
             for _, _, page_choice in mapped:
@@ -74,17 +77,19 @@ if pdf_file and master:
                 out.insert_pdf(doc, from_page=page_no, to_page=page_no)
             output_pdf = out.tobytes(garbage=4, deflate=True)
             out.close()
+        else:
+            output_pdf = pdf_bytes
+            export_label = "⬇️ Download PDF (Original — no pages mapped yet)"
+            st.warning("No pages mapped yet. The PDF button will download the original PDF until you map at least one master-list row.")
 
-        # PDF download control is always rendered in this section, not behind an export condition.
         st.subheader("Step 3 — Download output")
         st.download_button(
-            label="⬇️ Download Sequenced PDF",
-            data=output_pdf if output_pdf else b"",
-            file_name="survey_numbers_sequenced.pdf",
+            label=export_label,
+            data=output_pdf,
+            file_name="survey_numbers_sequenced.pdf" if mapped else "original_pdf_unmapped.pdf",
             mime="application/pdf",
-            disabled=(output_pdf is None),
             key="download_sequenced_pdf",
-            help="Enabled after you map at least one master-list row to a source PDF page."
+            help="Mapped rows export in master-list order. If nothing is mapped, this downloads the original PDF."
         )
         audit = pd.DataFrame({
             "Master row": range(1, len(master)+1),
