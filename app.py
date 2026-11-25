@@ -149,21 +149,35 @@ if "pages" in st.session_state:
     else:
         st.success("All master-list rows have a page selected.")
 
-    if st.button("Create PDF from selected pages in master-list order", type="primary", disabled=(len(ordered_pages) == 0)):
+    # Build output automatically on every rerun after mapping; no extra Create button needed.
+    export_bytes = b""
+    if ordered_pages:
         src = fitz.open(stream=pdf_bytes, filetype="pdf")
         out = fitz.open()
         for page_no in ordered_pages:
             out.insert_pdf(src, from_page=page_no - 1, to_page=page_no - 1)
-        st.session_state.export_pdf = out.tobytes(garbage=4, deflate=True)
-        st.session_state.export_pages = ordered_pages
+        export_bytes = out.tobytes(garbage=4, deflate=True)
         out.close()
         src.close()
-        st.success(f"PDF generated: {len(ordered_pages)} pages in pasted master-list order. Skipped {len(unmapped)} unmapped rows.")
+        st.success(f"Ready to download: {len(ordered_pages)} pages, in pasted master-list order. Skipped {len(unmapped)} unmapped rows.")
+    else:
+        st.warning("No source pages are mapped yet. Select a page in at least one Page selection row to enable the PDF download.")
 
-    if "export_pdf" in st.session_state:
-        st.download_button("⬇️ Download sequenced PDF", st.session_state.export_pdf,
-                          file_name="survey_pages_master_list_order.pdf", mime="application/pdf")
-        st.download_button("⬇️ Download mapping audit CSV", edited.to_csv(index=False).encode("utf-8-sig"),
-                          file_name="survey_page_mapping_audit.csv", mime="text/csv")
+    # Keep download controls visible, even when no pages are mapped (disabled in that case).
+    st.download_button(
+        "⬇️ Download sequenced PDF",
+        data=export_bytes,
+        file_name="survey_pages_master_list_order.pdf",
+        mime="application/pdf",
+        disabled=(len(ordered_pages) == 0),
+        help="Downloads only mapped pages, ordered by your master list. Unmapped entries are skipped."
+    )
+    st.download_button(
+        "⬇️ Download mapping audit CSV",
+        data=edited.to_csv(index=False).encode("utf-8-sig"),
+        file_name="survey_page_mapping_audit.csv",
+        mime="text/csv"
+    )
+
 else:
     st.info("Upload the PDF, paste the master list, and click Analyze PDF. Then review mappings and create the output PDF.")
