@@ -127,13 +127,13 @@ if "page_info" in st.session_state:
     c2.metric("Mapped rows", len(final_page_order))
     c3.metric("Unmapped rows", len(missing_entries))
     if missing_entries:
-        st.error("Some master-list entries are not mapped. Output will be blocked until all rows have a page selected.")
+        st.warning("Some entries are unmapped. You can still create a PDF using mapped rows only; unmapped rows will be skipped. Map the remaining entries if you need a complete output.")
         st.dataframe(pd.DataFrame(missing_entries, columns=["List position", "Missing survey no."]), hide_index=True)
     else:
         st.success("All rows mapped. Export will follow the master list from first row to last row exactly.")
 
-    # Pages intentionally may repeat when the same source page is required for repeated list entries.
-    if not missing_entries and st.button("Create PDF in EXACT master-list sequence", type="primary"):
+    # Export mapped rows even when some are missing; preserve order and allow repeated source pages.
+    if st.button("Create PDF from mapped rows (master-list order)", type="primary"):
         src = fitz.open(stream=pdf_bytes, filetype="pdf")
         out = fitz.open()
         for pno in final_page_order:
@@ -142,7 +142,7 @@ if "page_info" in st.session_state:
         out.close(); src.close()
         st.session_state.output_pdf = result
         st.session_state.output_page_order = final_page_order
-        st.success("Created. The output order is the selected page for each master-list row, top to bottom. No numeric sorting was applied.")
+        st.success(f"PDF created with {len(final_page_order)} mapped rows. {len(missing_entries)} unmapped rows were skipped. Order follows the master list; no numeric sorting was applied.")
 
     if "output_pdf" in st.session_state:
         st.download_button("Download sequenced PDF", st.session_state.output_pdf,
