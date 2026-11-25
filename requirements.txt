@@ -1,5 +1,5 @@
-
 streamlit>=1.32
 PyMuPDF>=1.23
 pandas>=2.0
-  
+pytesseract>=0.3.10
+Pillow>=10.0

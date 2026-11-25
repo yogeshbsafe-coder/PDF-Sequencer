@@ -1,61 +1,100 @@
 import re, io
-from collections import defaultdict, Counter
-import fitz
-import pandas as pd
-import streamlit as st
-
-st.set_page_config(page_title="PDF Survey Sequencer", page_icon="📄", layout="wide")
-st.title("PDF Survey Number Sequencer")
-st.write("Upload a PDF, paste the required survey-number order, and download a new PDF containing only matching pages.")
-
-GUJ=str.maketrans("૦૧૨૩૪૫૬૭૮૯","0123456789")
+from collections import defaultdict
+import fitz, pandas as pd, streamlit as st
+st.set_page_config(page_title='PDF Survey Sequencer V2', page_icon='📑', layout='wide')
+st.title('📑 PDF Survey Sequencer — V2')
+st.caption('Map survey numbers to pages, review/correct the map, sequence only requested pages, and report missing/extra/repeated numbers.')
+GUJ=str.maketrans('૦૧૨૩૪૫૬૭૮૯','0123456789')
 def norm(s):
-    s=str(s).translate(GUJ).strip().replace("પૈકી","/p")
-    s=re.sub(r"\s+","",s)
-    s=re.sub(r"/+","/",s)
-    return s.strip(",;")
-def split_seq(s):
-    return [norm(x) for x in re.split(r"[\n,;]+",s) if norm(x)]
-def tokens(s):
-    s=s.translate(GUJ).replace("પૈકી","/p")
-    return [norm(x) for x in re.findall(r"(?<![A-Za-z0-9])\d{1,6}(?:\s*(?:/|\.|-)\s*(?:p\s*)?\d{1,4})?(?![A-Za-z0-9])",s,re.I)]
-pdf=st.file_uploader("Upload source PDF",type=["pdf"])
-seq=st.text_area("Paste survey numbers in required order",height=220,placeholder="162\n164\n165\n169")
-st.caption("Gujarati and English digits supported. Scanned PDFs need OCR/searchable text for reliable matching.")
-if pdf and seq.strip():
-    doc=fitz.open(stream=pdf.getvalue(),filetype="pdf")
-    pmap=defaultdict(list); allnums=[]
-    for i,p in enumerate(doc):
-        nums=list(dict.fromkeys(tokens(p.get_text("text"))))
-        for n in nums:
-            pmap[n].append(i); allnums.append(n)
-    wanted=split_seq(seq); selected=[]; matched=[]; missing=[]
-    for n in wanted:
-        pages=pmap.get(n,[])
+    s=str(s).translate(GUJ).strip().lower().replace('પૈકી','/p')
+    s=re.sub(r'\s+','',s).replace('\\','/')
+    s=re.sub(r'/+','/',s)
+    s=re.sub(r'/p(?=\d)','p',s)
+    s=re.sub(r'p/(?=\d)','p',s)
+    return s.strip(' ,;')
+def seqparse(s): return [norm(v) for v in re.split(r'[\n,;]+',s.translate(GUJ)) if norm(v)]
+TOKEN=re.compile(r'(?<![\w])\d{1,6}(?:\s*(?:/|\.|-)\s*(?:p\s*)?\d{1,4})?(?:\s*p\s*\d{1,4})?(?![\w])',re.I)
+LABEL=re.compile(r'(survey|sur\.?\s*no|s\.?\s*no|block\s*no|plot\s*no|સર્વે|સર્વે\s*નં|બ્લોક\s*નં|નંબર)',re.I)
+def candidates(text):
+    text=text.translate(GUJ).replace('પૈકી','/p')
+    all_tokens=list(dict.fromkeys(norm(m.group(0)) for m in TOKEN.finditer(text)))
+    label_tokens=[]
+    for line in text.splitlines():
+        if LABEL.search(line): label_tokens.extend(norm(m.group(0)) for m in TOKEN.finditer(line))
+    return list(dict.fromkeys(label_tokens)), all_tokens
+def ocr(page):
+    try:
+        import pytesseract
+        from PIL import Image
+        px=page.get_pixmap(matrix=fitz.Matrix(2,2),alpha=False)
+        return pytesseract.image_to_string(Image.open(io.BytesIO(px.tobytes('png'))),lang='eng+guj')
+    except Exception as e: return f'[OCR error: {e}]'
+def preview(page): return page.get_pixmap(matrix=fitz.Matrix(1.2,1.2),alpha=False).tobytes('png')
+def export_pdf(doc,pages):
+    out=fitz.open()
+    for page_idx in pages: out.insert_pdf(doc,from_page=page_idx,to_page=page_idx)
+    return out.tobytes()
+pdf=st.file_uploader('Upload PDF',type=['pdf'])
+sequence=st.text_area('Paste survey-number sequence (one per line or comma-separated)',height=170,placeholder='162\n164\n165\n169')
+ocr_on=st.checkbox('OCR pages with little/no selectable text (Gujarati + English)',value=True)
+if pdf and sequence.strip():
+    try: doc=fitz.open(stream=pdf.getvalue(),filetype='pdf')
+    except Exception as e: st.error(f'Could not open PDF: {e}'); st.stop()
+    wanted=seqparse(sequence); infos=[]; prog=st.progress(0); status=st.empty()
+    for idx,page in enumerate(doc):
+        text=page.get_text('text') or ''; used=False
+        if ocr_on and len(text.strip())<25:
+            status.info(f'OCR page {idx+1}/{len(doc)}')
+            scanned=ocr(page)
+            if not scanned.startswith('[OCR error'): text=(text+'\n'+scanned).strip(); used=True
+        labeled, allnums=candidates(text); suggestions=labeled if labeled else allnums
+        infos.append({'PDF page':idx+1,'Survey number(s) — edit if needed':', '.join(suggestions),'Label detections':', '.join(labeled),'All detected number candidates':', '.join(allnums[:35]),'OCR used':'Yes' if used else 'No','Text preview':text[:900]})
+        prog.progress((idx+1)/len(doc))
+    status.empty(); prog.empty()
+    st.header('Step 2 — Review and correct the page mapping')
+    st.warning('Auto-detection is a suggestion. It can confuse survey numbers with dates, areas, amounts, or other numbers. Correct the editable Survey number(s) column. If a page contains multiple survey numbers, separate them with commas.')
+    df=pd.DataFrame(infos)
+    editable=st.data_editor(df[['PDF page','Survey number(s) — edit if needed','Label detections','All detected number candidates','OCR used']],hide_index=True,use_container_width=True,num_rows='fixed',column_config={'PDF page':st.column_config.NumberColumn(disabled=True),'Label detections':st.column_config.TextColumn(disabled=True),'All detected number candidates':st.column_config.TextColumn(disabled=True),'OCR used':st.column_config.TextColumn(disabled),'Survey number(s) — edit if needed':st.column_config.TextColumn(help='Edit manually; multiple numbers on a page separated by commas.')})
+    with st.expander('View original PDF page to verify mapping'):
+        page_num=st.selectbox('Select source page',list(range(1,len(doc)+1)))
+        st.image(preview(doc[page_num-1]),caption=f'Original source page {page_num}',use_container_width=True)
+        st.text_area('Extracted text',infos[page_num-1]['Text preview'],height=150,disabled=True)
+    mapping=defaultdict(list)
+    for _,row in editable.iterrows():
+        p=int(row['PDF page']); val=str(row['Survey number(s) — edit if needed'] or '')
+        for item in re.split(r'[,;\n]+',val):
+            key=norm(item)
+            if key: mapping[key].append(p)
+    matched=[]; missing=[]; output_pages=[]
+    for number in wanted:
+        pages=mapping.get(number,[])
         if pages:
-            matched.append({"Survey number":n,"PDF page(s)":", ".join(str(x+1) for x in pages)})
-            selected.extend(pages)
-        else: missing.append(n)
-    selected=list(dict.fromkeys(selected))
-    dups=sorted(n for n,c in Counter(allnums).items() if c>1)
-    not_list=sorted(set(pmap)-set(wanted))
-    a,b,c=st.columns(3); a.metric("Source pages",len(doc)); b.metric("Requested numbers",len(wanted)); c.metric("Selected pages",len(selected))
-    st.subheader("Matching preview")
-    if matched: st.dataframe(pd.DataFrame(matched),use_container_width=True,hide_index=True)
-    else: st.warning("No exact matches found. Confirm PDF text or survey-number formatting.")
-    x,y=st.columns(2)
-    with x:
-        st.markdown("**Not found in PDF**"); st.write(", ".join(missing) or "None")
-        st.markdown("**Repeated numbers detected in PDF**"); st.write(", ".join(dups) or "None")
-    with y:
-        st.markdown("**In PDF but not in your list**"); st.write(", ".join(not_list) or "None")
-        st.markdown("**Pages skipped**"); st.write(len(doc)-len(selected))
-    if selected:
-        out=fitz.open()
-        for i in selected: out.insert_pdf(doc,from_page=i,to_page=i)
-        st.download_button("Download sequenced PDF",out.tobytes(),"Sequenced_Survey_Pages.pdf","application/pdf",type="primary")
-    report=["PDF SURVEY SEQUENCING REPORT",f"Source pages: {len(doc)}",f"Requested numbers: {len(wanted)}",f"Selected pages: {len(selected)}","","MATCHED:"]
-    report += [f"{r['Survey number']}: PDF page(s) {r['PDF page(s)']}" for r in matched]
-    report += ["","NOT FOUND:",", ".join(missing) or "None","", "REPEATED IN PDF:",", ".join(dups) or "None","", "IN PDF BUT NOT IN LIST:",", ".join(not_list) or "None"]
-    st.download_button("Download report", "\n".join(report).encode("utf-8"),"Sequencing_Report.txt","text/plain")
-elif pdf: st.info("Paste the required sequence to continue.")
+            matched.append((number,pages))
+            for p in pages:
+                if p not in output_pages: output_pages.append(p)
+        else: missing.append(number)
+    repeated={n:sorted(set(ps)) for n,ps in mapping.items() if len(set(ps))>1}
+    not_requested=sorted(set(mapping)-set(wanted))
+    skipped=sorted(set(range(1,len(doc)+1))-set(output_pages))
+    st.header('Step 3 — Matching results')
+    a,b,c,d=st.columns(4); a.metric('Source pages',len(doc)); b.metric('Pages in output',len(output_pages)); c.metric('Missing list numbers',len(missing)); d.metric('Skipped pages',len(skipped))
+    st.subheader('Matched numbers → original PDF pages')
+    if matched: st.dataframe(pd.DataFrame([{'Survey number':n,'Original page(s)':', '.join(map(str,ps))} for n,ps in matched]),hide_index=True,use_container_width=True)
+    else: st.warning('No matches yet. Edit the page map above, then recheck.')
+    left,right=st.columns(2)
+    with left:
+        st.markdown('**In your list but not mapped in PDF (missing)**'); st.write(', '.join(missing) or 'None')
+        st.markdown('**Survey numbers mapped on multiple source pages**'); st.write('; '.join(f'{n}: pages {ps}' for n,ps in repeated.items()) or 'None detected')
+    with right:
+        st.markdown('**Mapped in PDF but not requested (extra numbers)**'); st.write(', '.join(not_requested) or 'None')
+        st.markdown('**Skipped source page numbers**'); st.write(', '.join(map(str,skipped)) or 'None')
+    if output_pages:
+        st.download_button('⬇ Download reordered PDF (matching pages only)',export_pdf(doc,[p-1 for p in output_pages]),'Survey_Sequence_Output.pdf','application/pdf',type='primary')
+    report=['PDF SURVEY SEQUENCER V2 REPORT',f'Input pages: {len(doc)}',f'Requested list entries: {len(wanted)}',f'Output pages: {len(output_pages)}',f'Skipped original pages: {skipped or "None"}','','MATCHES:']
+    report += [f'{n}: original page(s) {ps}' for n,ps in matched]
+    report += ['', 'MISSING (requested but no page mapped):',', '.join(missing) or 'None','', 'REPEATED SURVEY NUMBERS (mapped on multiple pages):']
+    report += [f'{n}: original pages {ps}' for n,ps in repeated.items()] or ['None']
+    report += ['', 'IN PDF MAP BUT NOT REQUESTED:',', '.join(not_requested) or 'None']
+    st.download_button('⬇ Download detailed report', '\n'.join(report).encode('utf-8'),'Survey_Sequencer_Report.txt','text/plain')
+elif pdf: st.info('Paste your required survey-number sequence to start the matching.')
+else: st.info('Upload a PDF to begin.')
