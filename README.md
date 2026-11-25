@@ -1,11 +1,12 @@
-# PDF Survey Sequencer (Automatic PDF generation)
+# PDF Survey Sequencer (OCR fallback)
 
-Streamlit app that extracts survey identifiers from PDF text around Gujarati/English survey-number labels, matches them to the user's ordered list, and outputs a new PDF containing only matching pages in that order. Extra pages are excluded. Duplicate list entries are preserved when separate matching source pages exist.
+1. Upload the original PDF.
+2. Paste the requested survey sequence, one per line.
+3. The app reads embedded PDF text first. If no survey value is detected on a page, it runs Gujarati + English Tesseract OCR (if installed).
+4. Pages matching the requested survey list are assembled in the exact sequence. Unrequested pages are omitted.
+5. Download the sequenced PDF. CSV is optional.
 
-## Deploy
-1. Replace `app.py`, `requirements.txt`, `packages.txt` in your GitHub repo.
-2. Commit changes and ensure Streamlit Cloud points to the correct repo, branch, and `app.py`.
-3. Reboot/redeploy.
+## Deploy to Streamlit Community Cloud
+Replace `app.py`, `requirements.txt`, and `packages.txt` in the configured GitHub repository/branch. Commit, then redeploy/reboot the Streamlit app. Ensure `packages.txt` is at repository root and contains the Tesseract packages listed here.
 
-## Limitations
-Text-based PDFs are supported. Image-only/scanned PDFs require OCR, which is not included in this package. Diagnostics show what survey identifiers were detected per page. Matching uses exact normalized survey identifiers.
+Note: OCR accuracy varies with scan quality, print layout, and Gujarati recognition. Check the detection-details table if any requested survey number is missing. The code has been syntax-checked; OCR matching should be validated on your actual PDF before relying on it.
