@@ -54,7 +54,35 @@ if pdf and sequence.strip():
     st.header('Step 2 — Review and correct the page mapping')
     st.warning('Auto-detection is a suggestion. It can confuse survey numbers with dates, areas, amounts, or other numbers. Correct the editable Survey number(s) column. If a page contains multiple survey numbers, separate them with commas.')
     df=pd.DataFrame(infos)
-    editable=st.data_editor(df[['PDF page','Survey number(s) — edit if needed','Label detections','All detected number candidates','OCR used']],hide_index=True,use_container_width=True,num_rows='fixed',column_config={'PDF page':st.column_config.NumberColumn(disabled=True),'Label detections':st.column_config.TextColumn(disabled=True),'All detected number candidates':st.column_config.TextColumn(disabled=True),'OCR used':st.column_config.TextColumn(disabled),'Survey number(s) — edit if needed':st.column_config.TextColumn(help='Edit manually; multiple numbers on a page separated by commas.')})
+        editable = st.data_editor(
+        df[
+            [
+                'PDF page',
+                'Survey number(s) — edit if needed',
+                'Label detections',
+                'All detected number candidates',
+                'OCR used'
+            ]
+        ],
+        hide_index=True,
+        width="stretch",
+        num_rows="fixed",
+        disabled=[
+            'PDF page',
+            'Label detections',
+            'All detected number candidates',
+            'OCR used'
+        ],
+        column_config={
+            'PDF page': st.column_config.NumberColumn(),
+            'Label detections': st.column_config.TextColumn(),
+            'All detected number candidates': st.column_config.TextColumn(),
+            'OCR used': st.column_config.TextColumn(),
+            'Survey number(s) — edit if needed': st.column_config.TextColumn(
+                help='Edit manually; multiple numbers on a page separated by commas.'
+            )
+        }
+    )
     with st.expander('View original PDF page to verify mapping'):
         page_num=st.selectbox('Select source page',list(range(1,len(doc)+1)))
         st.image(preview(doc[page_num-1]),caption=f'Original source page {page_num}',use_container_width=True)
