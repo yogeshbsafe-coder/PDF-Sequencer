@@ -1,153 +1,207 @@
-import io, re, unicodedata, difflib
-import fitz
+import io
+import re
+import unicodedata
+from collections import Counter
+
+import fitz  # PyMuPDF
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title='Gujarati PDF Survey Sequencer', layout='wide')
-st.title('Gujarati Survey Number PDF Sequencer')
-st.write('Reads ONLY the Gujarati field “બ્લોક/સરવે નંબર :” (and close OCR variants), then exports matching pages in your list order. Extra pages are excluded.')
+st.set_page_config(page_title="Gujarati Survey PDF Sequencer", layout="wide")
+st.title("Gujarati Survey PDF Sequencer")
+st.markdown(
+    "Reads **only the current `બ્લોક સરવે નંબર` field** (not જૂનો બ્લોક/સરવે નંબર, " 
+    "not other numbers), then creates a new PDF containing only requested survey pages "
+    "in the exact order of your list."
+)
 
-GUJ = str.maketrans('૦૧૨૩૪૫૬૭૮૯', '0123456789')
+GUJ_DIGITS = str.maketrans("૦૧૨૩૪૫૬૭૮૯", "0123456789")
 
-def norm(s):
-    s = (s or '').translate(GUJ)
-    s = unicodedata.normalize('NFKC', s)
-    return re.sub(r'\s+', ' ', s).strip()
 
-def canonical(s):
-    s = norm(s).lower().replace('પૈકી', '/').replace('paiki', '/').replace('\\', '/')
-    s = re.sub(r'\s*/\s*', '/', s)
-    s = re.sub(r'[^0-9/.-]', '', s)
-    s = re.sub(r'/+', '/', s).strip('/')
-    return s
+def normalize_digits(text: str) -> str:
+    return unicodedata.normalize("NFKC", (text or "").translate(GUJ_DIGITS))
 
-def parse_master(raw):
-    result=[]
-    for x in re.split(r'[\n,;]+', norm(raw)):
-        x=x.strip()
-        if x:
-            x=re.sub(r'\s*(?:પૈકી|paiki)\s*', '/', x, flags=re.I).replace('\\','/').replace(' ','')
-            result.append(canonical(x))
-    return result
 
-# Target label: બ્લોક/સરવે નંબર. OCR may split words or confuse સરવે/સર્વે.
-LABEL_PATTERNS = [
-    r'બ્લોક\s*/?\s*સરવે\s*નં?બર?', r'બ્લોક\s*/?\s*સર્વે\s*નં?બર?',
-    r'બ્લોક\s*નં?બર?\s*[/ -]?\s*સરવે', r'સરવે\s*નં?બર?', r'સર્વે\s*નં?બર?',
-    r'block\s*/?\s*survey\s*(?:no\.?|number)?', r'block\s*/?\s*servey\s*(?:no\.?|number)?'
-]
-LABEL_RE = re.compile('|'.join('(?:'+p+')' for p in LABEL_PATTERNS), re.I)
-NUM_RE = re.compile(r'(?<![\w])([0-9]{1,6}(?:\s*[./-]\s*[0-9]{1,4})?)(?![\w])')
+def canonical_survey(text: str) -> str:
+    """Normalize a survey value only; preserve sub-number separators as slash."""
+    text = normalize_digits(text).lower()
+    text = text.replace("પૈકી", "/").replace("paiki", "/")
+    text = re.sub(r"\\s*[/.-]\\s*", "/", text)
+    text = re.sub(r"[^0-9/]", "", text)
+    text = re.sub(r"/+$", "", text)
+    return text
 
-def extract_after_label(text):
-    t=norm(text)
-    # Search across newlines and OCR-normalized text; only capture number after target label.
-    for lm in LABEL_RE.finditer(t):
-        tail=t[lm.end():lm.end()+160]
-        tail=re.sub(r'^[\s:：#№\-]+','',tail)
-        m=NUM_RE.search(tail)
-        if m:
-            v=canonical(m.group(1))
-            if v: return v
-    # Gujarati OCR may split the field label into separate words; fuzzy line check,
-    # then inspect only that line and the next line for its value.
-    lines=[norm(x) for x in (text or '').splitlines() if norm(x)]
-    target='બ્લોક સરવે નંબર'
-    for i,line in enumerate(lines):
-        compact=re.sub(r'\s+','',line)
-        score=max(difflib.SequenceMatcher(None, compact, re.sub(r'\s+','',target)).ratio(),
-                 difflib.SequenceMatcher(None, compact, re.sub(r'\s+','', 'બ્લોક સર્વે નંબર')).ratio())
-        if score >= .48 or ('બ્લોક' in line and ('સરવે' in line or 'સર્વે' in line)):
-            after=line + (' '+lines[i+1] if i+1<len(lines) else '')
-            nums=NUM_RE.findall(after)
-            if nums:
-                # Prefer a number after colon; otherwise first number on matched label line/next line.
-                v=canonical(nums[0]);
-                if v:return v
+
+def parse_sequence(raw: str):
+    items = []
+    for line in re.split(r"[\n,;]+", normalize_digits(raw)):
+        item = line.strip()
+        if not item:
+            continue
+        item = re.sub(r"\s*(?:પૈકી|paiki)\s*", "/", item, flags=re.I)
+        key = canonical_survey(item)
+        if key:
+            items.append(key)  # duplicates intentionally preserved
+    return items
+
+
+# Narrow label: current Block Survey Number only. Explicitly exclude old-survey label.
+CURRENT_LABEL_RE = re.compile(
+    r"(?<!જૂનો\s)(?:બ્લોક\s*[/]?\s*સરવે\s*નંબર|બ્લોક\s*[/]?\s*સર્વે\s*નંબર|"
+    r"બ્લોક\s*સરવે\s*નં?\s*|બ્લોક\s*સર્વે\s*નં?\s*)",
+    re.I,
+)
+NUMBER_RE = re.compile(r"[૦-૯0-9]{1,7}(?:\s*[/.-]\s*[૦-૯0-9]{1,5})?(?:\s*(?:પૈકી|paiki)\s*[૦-૯0-9]{1,5})?", re.I)
+
+
+def get_value_after_label(text: str):
+    """Extract a value only from a line containing the target current-field label."""
+    if not text:
+        return None
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for i, line in enumerate(lines):
+        # Old survey field is ignored even if OCR happens to include the target words.
+        if "જૂનો" in line or "જુનો" in line:
+            continue
+        m = CURRENT_LABEL_RE.search(line)
+        if not m:
+            continue
+        tail = line[m.end():]
+        tail = re.sub(r"^[\s:：#№-]+", "", tail)
+        nm = NUMBER_RE.search(tail)
+        if nm:
+            return canonical_survey(nm.group(0)) or None
+        # Field value can wrap to the next line; inspect only next line, not other fields.
+        if i + 1 < len(lines):
+            next_line = lines[i + 1]
+            if "જૂનો" not in next_line and "જુનો" not in next_line:
+                nm = NUMBER_RE.search(next_line)
+                if nm:
+                    return canonical_survey(nm.group(0)) or None
     return None
 
-def ocr_image(img, pytesseract):
-    # Multiple layouts improve recognition of forms with label/value on a separate line.
-    outputs=[]
-    for psm in (6, 11, 4, 12):
+
+def render_target_region(page, scale=3):
+    # Field is in the upper form area in the supplied land-record layout.
+    # OCR is restricted to the top 52% of the page to avoid unrelated lower-page content.
+    pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+    from PIL import Image
+    image = Image.open(io.BytesIO(pix.tobytes("png")))
+    w, h = image.size
+    return image.crop((0, 0, w, int(h * 0.52)))
+
+
+def run_ocr(image, pytesseract):
+    # Gujarati+English OCR only on the crop where the target field is expected.
+    attempts = []
+    for psm in (6, 11, 4):
         try:
-            outputs.append(pytesseract.image_to_string(img, lang='guj+eng', config=f'--psm {psm}'))
-        except Exception:
-            pass
-    return '\n'.join(outputs)
+            attempts.append(pytesseract.image_to_string(image, lang="guj+eng", config=f"--psm {psm}"))
+        except Exception as err:
+            return "", str(err)
+    return "\n".join(attempts), ""
 
-def detect_page(page, pytesseract, Image):
-    txt=page.get_text('text') or ''
-    val=extract_after_label(txt)
-    if val: return val, 'Embedded PDF text', txt, ''
-    pix=page.get_pixmap(matrix=fitz.Matrix(3,3), alpha=False)
-    image=Image.open(io.BytesIO(pix.tobytes('png')))
-    ocrtxt=ocr_image(image, pytesseract)
-    val=extract_after_label(ocrtxt)
-    if val: return val, 'Gujarati+English OCR (whole page, multiple layouts)', txt, ocrtxt
-    # Try OCR on 3 vertical bands as the field often sits in the upper half of land-record forms.
-    w,h=image.size
-    crops=[image.crop((0,0,w,int(h*.60))), image.crop((0,int(h*.15),w,int(h*.85))), image.crop((0,int(h*.35),w,h))]
-    for ci,crop in enumerate(crops,1):
-        ctext=ocr_image(crop, pytesseract)
-        val=extract_after_label(ctext)
-        if val: return val, f'Gujarati+English OCR (region {ci})', txt, ocrtxt+'\n[REGION OCR]\n'+ctext
-    return None, 'OCR attempted; target label/value not found', txt, ocrtxt
 
-pdf=st.file_uploader('Upload original Gujarati land-record PDF', type=['pdf'])
-sequence=st.text_area('Paste survey-number sequence (one number per line; your order is preserved)', height=220,
-                     placeholder='૧૬૨\n૧૬૪\n૧૬૫\n૧૬૯\n૧૭૪\n...')
-use_ocr=st.checkbox('Gujarati OCR fallback enabled', value=True)
+pdf_upload = st.file_uploader("Upload the original PDF", type=["pdf"])
+sequence_input = st.text_area(
+    "Survey number sequence (one per line; Gujarati or English digits; order preserved)",
+    height=230,
+    placeholder="૧૬૨\n૧૬૪\n૧૬૫\n૧૬૯\n૧૭૪\n...",
+)
+ocr_on = st.checkbox("Gujarati OCR fallback (for scanned PDFs)", value=True)
 
-if pdf and sequence.strip():
-    requested=parse_master(sequence)
-    try: doc=fitz.open(stream=pdf.getvalue(), filetype='pdf')
-    except Exception as e: st.error(f'Cannot open PDF: {e}'); st.stop()
+if pdf_upload and sequence_input.strip():
+    requested = parse_sequence(sequence_input)
+    st.caption(f"Parsed sequence: {len(requested)} items. Duplicates are preserved.")
     try:
-        import pytesseract
-        from PIL import Image
-        ocr_ready=True
+        source_doc = fitz.open(stream=pdf_upload.getvalue(), filetype="pdf")
+    except Exception as exc:
+        st.error(f"Could not open PDF: {exc}")
+        st.stop()
+
+    pytesseract = None
+    ocr_langs = []
+    if ocr_on:
         try:
-            langs=pytesseract.get_languages(config='')
-            if 'guj' not in langs or 'eng' not in langs: ocr_ready=False
-        except Exception: ocr_ready=False
-    except Exception:
-        pytesseract=None; Image=None; ocr_ready=False
-    detected=[]; diagnostics=[]
-    progress=st.progress(0, text='Scanning target survey field on every page…')
-    for i,page in enumerate(doc):
-        value=None; method='Embedded text only'; rawtext=page.get_text('text') or ''; ocrtext=''
-        value=extract_after_label(rawtext)
-        if value: method='Embedded PDF text: target label matched'
-        elif use_ocr and ocr_ready:
-            value,method,rawtext,ocrtext=detect_page(page,pytesseract,Image)
-        elif use_ocr and not ocr_ready:
-            method='OCR unavailable: Tesseract Gujarati (guj) + English (eng) required'
-        detected.append(value)
-        diagnostics.append({'PDF page':i+1,'Survey field value detected':value or 'Not found','Detection method':method,
-                           'PDF text preview':norm(rawtext)[:220], 'OCR preview':norm(ocrtext)[:300]})
-        progress.progress((i+1)/max(1,len(doc)), text=f'Checking page {i+1}/{len(doc)}')
-    progress.empty()
-    # Match by survey-number field only. Preserve list order; page reuse is prevented.
-    matches=[]; missing=[]; used=set()
-    for s in requested:
-        ix=next((j for j,v in enumerate(detected) if j not in used and canonical(v or '')==canonical(s)),None)
-        if ix is None: missing.append(s)
-        else: used.add(ix); matches.append((s,ix))
-    st.subheader('Survey field scan results')
-    st.write(f'Requested: **{len(requested)}** | Matched: **{len(matches)}** | Missing: **{len(missing)}**')
-    if missing: st.warning('Not detected in target field: '+', '.join(missing))
-    with st.expander('Detection details for each PDF page', expanded=(len(matches)==0)):
+            import pytesseract
+            ocr_langs = pytesseract.get_languages(config="")
+        except Exception:
+            pytesseract = None
+
+    detected = []
+    diagnostics = []
+    prog = st.progress(0, text="Reading current Block Survey Number field only…")
+    for page_index, page in enumerate(source_doc):
+        text_page = page.get_text("text") or ""
+        survey = get_value_after_label(text_page)
+        method = "PDF embedded text — target field"
+        ocr_preview = ""
+        if not survey and ocr_on:
+            if pytesseract is None:
+                method = "OCR not installed"
+            elif "guj" not in ocr_langs:
+                method = "Gujarati OCR language pack missing (guj)"
+            else:
+                try:
+                    crop = render_target_region(page, scale=3)
+                    ocr_preview, ocr_err = run_ocr(crop, pytesseract)
+                    if ocr_err:
+                        method = "OCR error: " + ocr_err[:140]
+                    else:
+                        survey = get_value_after_label(ocr_preview)
+                        method = "Gujarati OCR — upper field crop" if survey else "OCR attempted — current label/value not read"
+                except Exception as exc:
+                    method = "OCR failed: " + str(exc)[:140]
+        detected.append(survey)
+        diagnostics.append({
+            "PDF page": page_index + 1,
+            "Current Block Survey Number detected": survey or "Not detected",
+            "Method": method,
+            "Target-field OCR text (only crop)": (ocr_preview or "")[:300],
+        })
+        prog.progress((page_index + 1) / max(1, len(source_doc)), text=f"Checking page {page_index+1}/{len(source_doc)}")
+    prog.empty()
+
+    # Master list order is authoritative. A PDF page can be used only once; duplicates in
+    # the master list are retained if there are multiple pages carrying the same number.
+    matches, missing, used_pages = [], [], set()
+    for survey in requested:
+        page_i = next((i for i, found in enumerate(detected) if i not in used_pages and canonical_survey(found or "") == survey), None)
+        if page_i is None:
+            missing.append(survey)
+        else:
+            used_pages.add(page_i)
+            matches.append((survey, page_i))
+
+    st.subheader("Matching summary")
+    st.write(f"Requested: **{len(requested)}** · Matched pages: **{len(matches)}** · Not found: **{len(missing)}**")
+    if missing:
+        st.warning("Not found in the current Block Survey Number field: " + ", ".join(missing))
+    with st.expander("Page-by-page target-field diagnostics", expanded=(not matches)):
         st.dataframe(pd.DataFrame(diagnostics), use_container_width=True, hide_index=True)
+
+    # The PDF output button is always shown; when no pages match, it is disabled with an
+    # explicit explanation, not replaced by a CSV-only download.
     if matches:
-        out=fitz.open()
-        for survey,ix in matches: out.insert_pdf(doc,from_page=ix,to_page=ix)
-        data=out.tobytes(garbage=4,deflate=True); out.close()
-        st.success(f'Output PDF created with {len(matches)} selected pages, in the exact pasted order. All other pages removed.')
-        st.download_button('⬇️ DOWNLOAD SEQUENCED PDF',data=data,file_name='Gujarati_survey_pages_sequenced.pdf',mime='application/pdf',type='primary',use_container_width=True)
-        st.download_button('Optional matching CSV report',data=pd.DataFrame([{'Survey':s,'Original PDF page':ix+1} for s,ix in matches]).to_csv(index=False).encode('utf-8-sig'),file_name='matched_pages.csv',mime='text/csv')
+        output = fitz.open()
+        for survey, page_i in matches:
+            output.insert_pdf(source_doc, from_page=page_i, to_page=page_i)
+        output_bytes = output.tobytes(garbage=4, deflate=True)
+        output.close()
+        st.success(f"Created sequenced PDF: {len(matches)} pages. Extra pages excluded; requested order preserved.")
+        st.download_button(
+            "⬇️ DOWNLOAD SEQUENCED PDF",
+            data=output_bytes,
+            file_name="survey_pages_in_requested_sequence.pdf",
+            mime="application/pdf",
+            type="primary",
+            use_container_width=True,
+        )
+        report = pd.DataFrame([{"Requested Survey": s, "Original PDF Page": p + 1} for s, p in matches])
+        st.download_button("Optional match report (CSV)", data=report.to_csv(index=False).encode("utf-8-sig"), file_name="survey_match_report.csv", mime="text/csv")
     else:
-        st.error('No survey-number pages detected. OCR was attempted if enabled. Check detection details below; if OCR is not installed on deployment, install the packages listed in the ZIP.')
-        st.download_button('Optional scan report CSV',data=pd.DataFrame(diagnostics).to_csv(index=False).encode('utf-8-sig'),file_name='survey_detection_diagnostics.csv',mime='text/csv')
+        st.error("No pages matched the CURRENT `બ્લોક સરવે નંબર` field. The PDF download is unavailable until a match is found; CSV is only an optional diagnostic.")
+        st.button("⬇️ DOWNLOAD SEQUENCED PDF", disabled=True, type="primary", use_container_width=True)
+        st.download_button("Optional diagnostics CSV", data=pd.DataFrame(diagnostics).to_csv(index=False).encode("utf-8-sig"), file_name="target_field_diagnostics.csv", mime="text/csv")
 else:
-    st.info('Upload the PDF and paste the list to scan the target Gujarati survey field.')
+    st.info("Upload a PDF and paste the sequence. The tool will read only the current `બ્લોક સરવે નંબર` field and create a PDF in your exact order.")

@@ -1,15 +1,28 @@
-# Gujarati PDF Survey Sequencer — Field-focused OCR
+# Gujarati Survey PDF Sequencer (v4)
 
-This Streamlit app scans specifically the Gujarati field `બ્લોક/સરવે નંબર :` (including close variants) rather than searching arbitrary numbers on the page.
+## Purpose
+Upload the source land-record PDF and paste the survey-number master list. The app matches **only the current `બ્લોક સરવે નંબર` field**, explicitly ignoring the `જૂનો બ્લોક/સરવે નંબર` field and all other numbers. It creates a separate PDF in the exact master-list order and excludes all unmatched/extra pages.
 
-## Workflow
-1. Upload the original PDF.
-2. Paste survey numbers in the desired output sequence. Gujarati or Arabic digits are accepted; order and duplicate requests are preserved.
-3. The app reads embedded PDF text, then if needed uses Gujarati+English Tesseract OCR at high resolution and multiple page segmentation modes. It also retries upper/middle/lower page regions.
-4. It matches the detected value of the target field only, creates a new PDF in the exact requested sequence, and omits unmatched/extra pages.
-5. Diagnostics show each page's detected survey field, method, and OCR preview.
+## Files
+- `app.py`: Streamlit application
+- `requirements.txt`: Python libraries
+- `packages.txt`: Tesseract and Gujarati language system packages for Streamlit Cloud
 
-## Streamlit Cloud
-Replace `app.py`, `requirements.txt`, and `packages.txt` in your configured GitHub repository and commit. Ensure Streamlit Cloud is deploying the intended branch and main file. Reboot after deployment.
+## Deploy
+1. Replace the files in your GitHub repository with these four files.
+2. Commit and push.
+3. In Streamlit Cloud, verify the app repository, branch, and main file path (`app.py`), then reboot/redeploy.
 
-`packages.txt` installs Tesseract with Gujarati (`guj`) and English (`eng`) language data. OCR accuracy depends on scan quality and form layout; no sample PDF was provided for validation.
+## Use
+1. Upload original PDF.
+2. Paste survey numbers (one per line; Gujarati or English numerals accepted).
+3. Enable OCR for scanned PDFs.
+4. Download **DOWNLOAD SEQUENCED PDF** after pages match.
+
+## Detection
+- Searchable PDF: extracts embedded text and reads only the target current-field label/value.
+- Scanned PDF: OCR is attempted on the upper 52% page crop at 3x resolution using Gujarati + English Tesseract, then extraction is restricted to a line containing the target label. It does not use the old survey field.
+- If Tesseract Gujarati language data is unavailable in deployment, diagnostics indicate the missing language pack.
+
+## Important limitation
+The OCR target-field crop is based on the supplied form layout and is set to the upper 52% of the page. If your PDF uses a different page layout, upload a sample PDF so the crop can be calibrated. This version has syntax validation only; it has not been tested against your original full PDF.
