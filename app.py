@@ -61,12 +61,18 @@ def normalize_digits(text: str) -> str:
 
 
 def canonical_survey(text: str) -> str:
-    """Normalize a survey value only; preserve sub-number separators as slash."""
+    """Normalize main and nested paiki/sub-survey paths to one slash path.
+
+    Examples: 304/ પૈકી 2 -> 304/2; 306/paiki 1/paiki 1 -> 306/1/1.
+    Repeated separators introduced by OCR or typed formats are collapsed.
+    """
     text = normalize_digits(text).lower()
+    text = re.sub(r"(?<=[0-9])પ(?=[0-9])", "5", text)  # common Gujarati OCR/list typo: પ for ૫
     text = text.replace("પૈકી", "/").replace("paiki", "/")
     text = re.sub(r"\s*[/.-]\s*", "/", text)
     text = re.sub(r"[^0-9/]", "", text)
-    text = re.sub(r"/+$", "", text)
+    text = re.sub(r"/{2,}", "/", text)
+    text = re.sub(r"^/+|/+$", "", text)
     return text
 
 
@@ -89,7 +95,12 @@ CURRENT_LABEL_RE = re.compile(
     r"બ્લોક\s*સરવે\s*નં?\s*|બ્લોક\s*સર્વે\s*નં?\s*)",
     re.I,
 )
-NUMBER_RE = re.compile(r"[૦-૯0-9]{1,7}(?:\s*[/.-]\s*[૦-૯0-9]{1,5})?(?:\s*(?:પૈકી|paiki)\s*[૦-૯0-9]{1,5})?", re.I)
+# Main number followed by any number of slash/paiki sub-number levels.
+# Handles e.g. ૩૦૬/પૈકી ૧/પૈકી ૧ and ૩૯૦/૩/૨/પૈકી ૧.
+NUMBER_RE = re.compile(
+    r"[૦-૯0-9]{1,7}(?:\s*(?:[/.-]\s*(?:(?:પૈકી|paiki)\s*)?|(?:પૈકી|paiki)\s*)[૦-૯0-9]{1,5})*",
+    re.I,
+)
 
 
 def get_value_after_label(text: str):

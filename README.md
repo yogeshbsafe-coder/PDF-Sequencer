@@ -24,3 +24,9 @@ Replace the existing repository files with these four files, commit, and redeplo
 
 ## Important
 This is a design refresh of the v4 code. The underlying matching/OCR logic is unchanged. Syntax validation was performed; the visual appearance should be confirmed in the deployed Streamlit app.
+
+## Paiki / nested sub-survey sequence support (last update)
+- Master list accepts entries such as `304/ પૈકી 2`, `306/ પૈકી 1/ પૈકી 1`, `390/3/2/ પૈકી 1`.
+- Normalizes Gujarati digits and `પૈકી`/`paiki` hierarchy to slash paths (e.g. `306/પૈકી 1/પૈકી 1` → `306/1/1`).
+- Extracts multiple nested sub-number levels from the current `બ્લોક સરવે નંબર` field; main survey and each paiki subdivision are matched separately.
+- Keeps the pasted order and duplicate list entries; extra PDF pages remain excluded.
