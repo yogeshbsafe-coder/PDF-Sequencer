@@ -130,25 +130,75 @@ def get_value_after_label(text: str):
     return None
 
 
-def render_target_region(page, scale=3):
-    # Field is in the upper form area in the supplied land-record layout.
-    # OCR is restricted to the top 52% of the page to avoid unrelated lower-page content.
-    pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+def render_target_region(page, scale=2):
+    # Render only the upper form area directly (avoid rasterizing the full page).
+    # This speeds up OCR and keeps the target field isolated from unrelated content.
+    clip = fitz.Rect(0, 0, page.rect.width, page.rect.height * 0.48)
+    pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, alpha=False)
     from PIL import Image
-    image = Image.open(io.BytesIO(pix.tobytes("png")))
-    w, h = image.size
-    return image.crop((0, 0, w, int(h * 0.52)))
+    return Image.open(io.BytesIO(pix.tobytes("png")))
 
 
 def run_ocr(image, pytesseract):
-    # Gujarati+English OCR only on the crop where the target field is expected.
-    attempts = []
-    for psm in (6, 11, 4):
-        try:
-            attempts.append(pytesseract.image_to_string(image, lang="guj+eng", config=f"--psm {psm}"))
-        except Exception as err:
-            return "", str(err)
-    return "\n".join(attempts), ""
+    # Fast first pass. Only use the second PSM mode if the target field was not found.
+    try:
+        first = pytesseract.image_to_string(image, lang="guj+eng", config="--psm 6")
+        if get_value_after_label(first):
+            return first, ""
+        second = pytesseract.image_to_string(image, lang="guj+eng", config="--psm 11")
+        return first + "\n" + second, ""
+    except Exception as err:
+        return "", str(err)
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def scan_pdf_cached(pdf_bytes: bytes, ocr_enabled: bool):
+    """Cache page survey detection so Streamlit reruns don't repeat costly OCR."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        detected, diagnostics = [], []
+        ocr_engine = None
+        ocr_langs = []
+        if ocr_enabled:
+            try:
+                import pytesseract as _pytesseract
+                ocr_engine = _pytesseract
+                ocr_langs = _pytesseract.get_languages(config="")
+            except Exception:
+                ocr_engine = None
+
+        # Pass 1: fast embedded text extraction on every page.
+        page_texts = [page.get_text("text") or "" for page in doc]
+        for page_idx, page in enumerate(doc):
+            survey = get_value_after_label(page_texts[page_idx])
+            method = "PDF embedded text — target field"
+            ocr_preview = ""
+            if not survey and ocr_enabled:
+                if ocr_engine is None:
+                    method = "OCR not installed"
+                elif "guj" not in ocr_langs:
+                    method = "Gujarati OCR language pack missing (guj)"
+                else:
+                    try:
+                        crop = render_target_region(page, scale=2)
+                        ocr_preview, ocr_err = run_ocr(crop, ocr_engine)
+                        if ocr_err:
+                            method = "OCR error: " + ocr_err[:140]
+                        else:
+                            survey = get_value_after_label(ocr_preview)
+                            method = "Gujarati OCR — clipped upper field" if survey else "OCR attempted — current label/value not read"
+                    except Exception as exc:
+                        method = "OCR failed: " + str(exc)[:140]
+            detected.append(survey)
+            diagnostics.append({
+                "PDF page": page_idx + 1,
+                "Current Block Survey Number detected": survey or "Not detected",
+                "Method": method,
+                "Target-field OCR text (only crop)": (ocr_preview or "")[:300],
+            })
+        return detected, diagnostics
+    finally:
+        doc.close()
 
 
 # ------------------------------- MAIN WORKFLOW --------------------------------
@@ -190,40 +240,9 @@ if pdf_upload and sequence_input.strip():
         except Exception:
             pytesseract = None
 
-    detected = []
-    diagnostics = []
     st.markdown('<div class="section-card"><div class="section-head"><div class="step-pill">4</div><div><h3>Detection & results</h3><small>Reading only the current Block Survey Number field</small></div></div>', unsafe_allow_html=True)
-    prog = st.progress(0, text="Reading target survey field only…")
-    for page_index, page in enumerate(source_doc):
-        text_page = page.get_text("text") or ""
-        survey = get_value_after_label(text_page)
-        method = "PDF embedded text — target field"
-        ocr_preview = ""
-        if not survey and ocr_on:
-            if pytesseract is None:
-                method = "OCR not installed"
-            elif "guj" not in ocr_langs:
-                method = "Gujarati OCR language pack missing (guj)"
-            else:
-                try:
-                    crop = render_target_region(page, scale=3)
-                    ocr_preview, ocr_err = run_ocr(crop, pytesseract)
-                    if ocr_err:
-                        method = "OCR error: " + ocr_err[:140]
-                    else:
-                        survey = get_value_after_label(ocr_preview)
-                        method = "Gujarati OCR — upper field crop" if survey else "OCR attempted — current label/value not read"
-                except Exception as exc:
-                    method = "OCR failed: " + str(exc)[:140]
-        detected.append(survey)
-        diagnostics.append({
-            "PDF page": page_index + 1,
-            "Current Block Survey Number detected": survey or "Not detected",
-            "Method": method,
-            "Target-field OCR text (only crop)": (ocr_preview or "")[:300],
-        })
-        prog.progress((page_index + 1) / max(1, len(source_doc)), text=f"Checking page {page_index+1}/{len(source_doc)}")
-    prog.empty()
+    with st.spinner("Scanning survey-number fields… OCR is optimized for faster processing"):
+        detected, diagnostics = scan_pdf_cached(pdf_upload.getvalue(), ocr_on)
 
     matches, missing, used_pages = [], [], set()
     for survey in requested:

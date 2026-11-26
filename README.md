@@ -1,34 +1,18 @@
-# Gujarati Survey PDF Sequencer — UI Design Update
+# Gujarati Survey PDF Sequencer — Faster Processing Update
 
-This package refreshes the app's visual design while retaining the same survey matching and PDF sequencing workflow from v4.
+This update preserves the existing current-field detection, Gujarati/English numeral normalization, paiki/nested sub-survey matching, exact sequence ordering, and PDF export behavior while reducing OCR time.
 
-## What's changed
-- Modern navy/teal gradient header and clean page background
-- Numbered workflow sections and clearer headings
-- Two-column upload and survey-sequence input layout
-- More polished upload and sequence input styling
-- Progress indicator, matched/missing metrics, diagnostics expander
-- Prominent final PDF download button
-- Responsive CSS adjustments for narrow screens
-
-## Core workflow preserved
-- Upload source PDF and paste requested survey list
-- Match only the current `બ્લોક સરવે નંબર` field (not the old survey number field)
-- Gujarati and English digit normalization
-- Preserve the exact sequence and duplicates
-- Exclude extra/unmatched pages from the final PDF
-- CSV remains optional diagnostics only
+## Performance improvements
+- Render only the upper 48% of the PDF page directly (no full-page rasterization), at 2x instead of 3x.
+- OCR first with one mode (`--psm 6`); retry using `--psm 11` only when the target field is not detected.
+- Cache survey detection results for the uploaded PDF and OCR setting, so Streamlit reruns caused by UI interactions do not repeat OCR.
+- Embedded PDF text is checked first; OCR runs only for pages where the current survey-number field is not found in embedded text.
 
 ## Deploy
-Replace the existing repository files with these four files, commit, and redeploy/reboot the Streamlit app.
+Replace `app.py`, `requirements.txt`, `packages.txt`, and `README.md` in your GitHub repository, commit, and redeploy/reboot Streamlit Cloud.
 
-## Important
-This is a design refresh of the v4 code. The underlying matching/OCR logic is unchanged. Syntax validation was performed; the visual appearance should be confirmed in the deployed Streamlit app.
-
-## Paiki / nested sub-survey sequence support (last update)
-- Master list accepts entries such as `304/ પૈકી 2`, `306/ પૈકી 1/ પૈકી 1`, `390/3/2/ પૈકી 1`.
-- Normalizes Gujarati digits and `પૈકી`/`paiki` hierarchy to slash paths (e.g. `306/પૈકી 1/પૈકી 1` → `306/1/1`).
-- Extracts multiple nested sub-number levels from the current `બ્લોક સરવે નંબર` field; main survey and each paiki subdivision are matched separately.
-- Keeps the pasted order and duplicate list entries; extra PDF pages remain excluded.
-
-https://pdf-survey-sequencer-2026.streamlit.app/?utm_source=chatgpt.com
+## Requirements
+- Searchable/text PDFs can be detected through embedded text extraction without OCR.
+- Scanned PDFs require Tesseract with Gujarati (`guj`) and English (`eng`) language data installed.
+- Only the current `બ્લોક સરવે નંબર` field is used; the old survey-number field is excluded.
+- Main survey numbers and nested `પૈકી` sub-survey paths are matched in the user's exact requested order.
