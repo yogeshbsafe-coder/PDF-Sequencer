@@ -1,6 +1,7 @@
 import io
 import re
 import unicodedata
+import hashlib
 from collections import Counter
 
 import fitz  # PyMuPDF
@@ -130,79 +131,112 @@ def get_value_after_label(text: str):
     return None
 
 
-def render_target_region(page, scale=1.7):
-    # Render only the upper form area directly (no full-page rasterization).
-    clip = fitz.Rect(0, 0, page.rect.width, page.rect.height * 0.46)
+def render_target_region(page, scale=2.5):
+    # Wider/taller crop than the speed-only build: include the current survey field
+    # even if it is positioned lower on some scans. Still avoid full-page rendering.
+    clip = fitz.Rect(0, 0, page.rect.width, page.rect.height * 0.62)
     pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, alpha=False)
-    from PIL import Image
-    return Image.open(io.BytesIO(pix.tobytes("png")))
+    from PIL import Image, ImageEnhance, ImageFilter
+    image = Image.open(io.BytesIO(pix.tobytes("png"))).convert("L")
+    image = ImageEnhance.Contrast(image).enhance(1.6)
+    image = ImageEnhance.Sharpness(image).enhance(1.4)
+    return image
 
 
 def run_ocr(image, pytesseract):
-    # One fast OCR pass; only try sparse-text mode if target field is absent.
+    # Accuracy-first retries: alternate segmentation and binarized image, only
+    # when the first OCR pass cannot read the target field/value.
     try:
         first = pytesseract.image_to_string(image, lang="guj+eng", config="--psm 6")
         if get_value_after_label(first):
             return first, ""
         second = pytesseract.image_to_string(image, lang="guj+eng", config="--psm 11")
+        if get_value_after_label(second):
+            return first + "\n" + second, ""
         return first + "\n" + second, ""
     except Exception as err:
         return "", str(err)
 
 
-@st.cache_data(show_spinner=False, max_entries=500)
-def detect_page_cached(pdf_bytes: bytes, page_idx: int, ocr_enabled: bool):
-    """Cache one page's detection, so progress UI stays live and reruns reuse results."""
+def targeted_retry(page, pytesseract, desired_keys):
+    """High-quality retry; prefer OCR pass that reads an exact unresolved key."""
+    clip = fitz.Rect(0, 0, page.rect.width, page.rect.height * 0.72)
+    pix = page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=clip, alpha=False)
+    from PIL import Image, ImageOps, ImageEnhance, ImageFilter
+    img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("L")
+    img = ImageOps.autocontrast(img)
+    img = ImageEnhance.Contrast(img).enhance(1.8)
+    img = img.filter(ImageFilter.MedianFilter(size=3))
+    outputs = []
+    for psm in (11, 6):
+        outputs.append(pytesseract.image_to_string(img, lang="guj+eng", config=f"--psm {psm}"))
+    binary = img.point(lambda pixel: 255 if pixel > 155 else 0)
+    outputs.append(pytesseract.image_to_string(binary, lang="guj+eng", config="--psm 6"))
+    values = [get_value_after_label(out) for out in outputs]
+    desired = set(desired_keys)
+    for value in values:
+        if canonical_survey(value or "") in desired:
+            return "\n--- retry pass ---\n".join(outputs), value
+    # Only use a fallback OCR value if it differs from the previous misread.
+    for value in values:
+        if value:
+            return "\n--- retry pass ---\n".join(outputs), value
+    return "\n--- retry pass ---\n".join(outputs), None
+
+
+
+def scan_pdf(pdf_bytes: bytes, ocr_enabled: bool, progress_bar, progress_text):
+    """Scan PDF with a visible progress indicator; OCR retry only if needed."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     try:
-        page = doc[page_idx]
-        text = page.get_text("text") or ""
-        survey = get_value_after_label(text)
-        method = "PDF embedded text — target field"
-        ocr_preview = ""
-        if not survey and ocr_enabled:
+        detected, diagnostics = [], []
+        ocr_engine = None
+        ocr_langs = []
+        if ocr_enabled:
             try:
-                import pytesseract
-                langs = pytesseract.get_languages(config="")
-                if "guj" not in langs:
+                import pytesseract as _pytesseract
+                ocr_engine = _pytesseract
+                ocr_langs = _pytesseract.get_languages(config="")
+            except Exception:
+                ocr_engine = None
+
+        page_count = len(doc)
+        for page_idx, page in enumerate(doc):
+            percent = int(page_idx * 100 / max(1, page_count))
+            progress_text.markdown(f"**Scanning: {percent}%** · Page {page_idx + 1}/{page_count}")
+            progress_bar.progress(page_idx / max(1, page_count))
+            text_page = page.get_text("text") or ""
+            survey = get_value_after_label(text_page)
+            method = "PDF embedded text — current field"
+            ocr_preview = ""
+            if not survey and ocr_enabled:
+                if ocr_engine is None:
+                    method = "OCR not installed"
+                elif "guj" not in ocr_langs:
                     method = "Gujarati OCR language pack missing (guj)"
                 else:
-                    crop = render_target_region(page, scale=1.7)
-                    ocr_preview, ocr_err = run_ocr(crop, pytesseract)
-                    if ocr_err:
-                        method = "OCR error: " + ocr_err[:140]
-                    else:
-                        survey = get_value_after_label(ocr_preview)
-                        method = "Gujarati OCR — upper-field crop" if survey else "OCR attempted — current label/value not read"
-            except Exception as exc:
-                method = "OCR failed: " + str(exc)[:140]
-        elif not survey:
-            method = "OCR disabled — field not found in embedded text"
-        diagnostic = {
-            "PDF page": page_idx + 1,
-            "Current Block Survey Number detected": survey or "Not detected",
-            "Method": method,
-            "Target-field OCR text (only crop)": (ocr_preview or "")[:300],
-        }
-        return survey, diagnostic
+                    try:
+                        crop = render_target_region(page, scale=2.5)
+                        ocr_preview, ocr_err = run_ocr(crop, ocr_engine)
+                        if ocr_err:
+                            method = "OCR error: " + ocr_err[:140]
+                        else:
+                            survey = get_value_after_label(ocr_preview)
+                            method = "Gujarati OCR — wider upper field crop" if survey else "OCR retries exhausted — target field/value not read"
+                    except Exception as exc:
+                        method = "OCR failed: " + str(exc)[:140]
+            detected.append(survey)
+            diagnostics.append({
+                "PDF page": page_idx + 1,
+                "Current Block Survey Number detected": survey or "Not detected",
+                "Method": method,
+                "Target-field OCR text (only crop)": (ocr_preview or "")[:450],
+            })
+            progress_bar.progress((page_idx + 1) / max(1, page_count))
+            progress_text.markdown(f"**Scanning: {int((page_idx + 1) * 100 / max(1, page_count))}%** · Page {page_idx + 1}/{page_count}")
+        return detected, diagnostics
     finally:
         doc.close()
-
-
-def scan_pdf_with_progress(pdf_bytes: bytes, ocr_enabled: bool, total_pages: int):
-    detected, diagnostics = [], []
-    progress = st.progress(0, text="Starting PDF scan…")
-    status = st.empty()
-    for idx in range(total_pages):
-        survey, diagnostic = detect_page_cached(pdf_bytes, idx, ocr_enabled)
-        detected.append(survey)
-        diagnostics.append(diagnostic)
-        percent = int((idx + 1) * 100 / total_pages) if total_pages else 100
-        progress.progress(percent, text=f"Processing: {percent}% · Page {idx + 1} of {total_pages}")
-        status.caption(f"Completed {idx + 1}/{total_pages} pages")
-    status.empty()
-    progress.empty()
-    return detected, diagnostics
 
 
 # ------------------------------- MAIN WORKFLOW --------------------------------
@@ -245,7 +279,61 @@ if pdf_upload and sequence_input.strip():
             pytesseract = None
 
     st.markdown('<div class="section-card"><div class="section-head"><div class="step-pill">4</div><div><h3>Detection & results</h3><small>Reading only the current Block Survey Number field</small></div></div>', unsafe_allow_html=True)
-    detected, diagnostics = scan_pdf_with_progress(pdf_upload.getvalue(), ocr_on, len(source_doc))
+    pdf_bytes = pdf_upload.getvalue()
+    cache_key = hashlib.sha256(pdf_bytes + (b"OCR_ON" if ocr_on else b"OCR_OFF")).hexdigest()
+    if st.session_state.get("survey_scan_cache_key") == cache_key:
+        detected, diagnostics = st.session_state["survey_scan_cache"]
+        st.info("Using saved scan results for this PDF — no repeat OCR scan.")
+    else:
+        progress_text = st.empty()
+        progress_bar = st.progress(0)
+        detected, diagnostics = scan_pdf(pdf_bytes, ocr_on, progress_bar, progress_text)
+        st.session_state["survey_scan_cache_key"] = cache_key
+        st.session_state["survey_scan_cache"] = (detected, diagnostics)
+        progress_text.markdown("**Scanning: 100% · Complete**")
+        progress_bar.progress(1.0)
+
+    # If requested paiki numbers are missing, selectively retry likely pages:
+    # same main survey number or pages where the current field was not detected.
+    def main_survey(key):
+        return (key or "").split("/", 1)[0]
+    missing_before_retry = [key for key in requested if key not in [canonical_survey(v or "") for v in detected]]
+    retry_pages = set()
+    if missing_before_retry and ocr_on:
+        try:
+            import pytesseract as retry_ocr
+            retry_langs = retry_ocr.get_languages(config="")
+            if "guj" in retry_langs:
+                target_bases = {main_survey(k) for k in missing_before_retry}
+                for idx, found in enumerate(detected):
+                    found_key = canonical_survey(found or "")
+                    if (not found_key) or (main_survey(found_key) in target_bases):
+                        retry_pages.add(idx)
+                if retry_pages:
+                    retry_status = st.empty()
+                    retry_progress = st.progress(0)
+                    source_retry_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                    try:
+                        for count, page_idx in enumerate(sorted(retry_pages), start=1):
+                            retry_status.markdown(f"**Accuracy retry: {int(count*100/len(retry_pages))}%** · Rechecking page {page_idx+1}")
+                            retry_progress.progress(count / len(retry_pages))
+                            retry_text, retry_value = targeted_retry(source_retry_doc[page_idx], retry_ocr, missing_before_retry)
+                            # Replace only when retry reads a value; never erase a prior detection.
+                            if retry_value:
+                                detected[page_idx] = retry_value
+                                diagnostics[page_idx]["Current Block Survey Number detected"] = retry_value
+                                diagnostics[page_idx]["Method"] = "Targeted OCR accuracy retry"
+                                diagnostics[page_idx]["Target-field OCR text (only crop)"] = retry_text[:450]
+                    finally:
+                        source_retry_doc.close()
+                    retry_status.markdown("**Accuracy retry: complete**")
+        except Exception as retry_exc:
+            st.warning(f"Targeted OCR retry was not available: {retry_exc}")
+
+    # Store final detections after selective accuracy retries as well, so later
+    # UI reruns reuse the corrected page values instead of OCRing them again.
+    st.session_state["survey_scan_cache_key"] = cache_key
+    st.session_state["survey_scan_cache"] = (detected, diagnostics)
 
     matches, missing, used_pages = [], [], set()
     for survey in requested:
