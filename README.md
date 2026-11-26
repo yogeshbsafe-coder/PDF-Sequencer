@@ -1,28 +1,26 @@
-# Gujarati Survey PDF Sequencer (v4)
+# Gujarati Survey PDF Sequencer — UI Design Update
 
-## Purpose
-Upload the source land-record PDF and paste the survey-number master list. The app matches **only the current `બ્લોક સરવે નંબર` field**, explicitly ignoring the `જૂનો બ્લોક/સરવે નંબર` field and all other numbers. It creates a separate PDF in the exact master-list order and excludes all unmatched/extra pages.
+This package refreshes the app's visual design while retaining the same survey matching and PDF sequencing workflow from v4.
 
-## Files
-- `app.py`: Streamlit application
-- `requirements.txt`: Python libraries
-- `packages.txt`: Tesseract and Gujarati language system packages for Streamlit Cloud
+## What's changed
+- Modern navy/teal gradient header and clean page background
+- Numbered workflow sections and clearer headings
+- Two-column upload and survey-sequence input layout
+- More polished upload and sequence input styling
+- Progress indicator, matched/missing metrics, diagnostics expander
+- Prominent final PDF download button
+- Responsive CSS adjustments for narrow screens
+
+## Core workflow preserved
+- Upload source PDF and paste requested survey list
+- Match only the current `બ્લોક સરવે નંબર` field (not the old survey number field)
+- Gujarati and English digit normalization
+- Preserve the exact sequence and duplicates
+- Exclude extra/unmatched pages from the final PDF
+- CSV remains optional diagnostics only
 
 ## Deploy
-1. Replace the files in your GitHub repository with these four files.
-2. Commit and push.
-3. In Streamlit Cloud, verify the app repository, branch, and main file path (`app.py`), then reboot/redeploy.
+Replace the existing repository files with these four files, commit, and redeploy/reboot the Streamlit app.
 
-## Use
-1. Upload original PDF.
-2. Paste survey numbers (one per line; Gujarati or English numerals accepted).
-3. Enable OCR for scanned PDFs.
-4. Download **DOWNLOAD SEQUENCED PDF** after pages match.
-
-## Detection
-- Searchable PDF: extracts embedded text and reads only the target current-field label/value.
-- Scanned PDF: OCR is attempted on the upper 52% page crop at 3x resolution using Gujarati + English Tesseract, then extraction is restricted to a line containing the target label. It does not use the old survey field.
-- If Tesseract Gujarati language data is unavailable in deployment, diagnostics indicate the missing language pack.
-
-## Important limitation
-The OCR target-field crop is based on the supplied form layout and is set to the upper 52% of the page. If your PDF uses a different page layout, upload a sample PDF so the crop can be calibrated. This version has syntax validation only; it has not been tested against your original full PDF.
+## Important
+This is a design refresh of the v4 code. The underlying matching/OCR logic is unchanged. Syntax validation was performed; the visual appearance should be confirmed in the deployed Streamlit app.

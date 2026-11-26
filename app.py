@@ -7,13 +7,51 @@ import fitz  # PyMuPDF
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Gujarati Survey PDF Sequencer", layout="wide")
-st.title("Gujarati Survey PDF Sequencer")
+st.set_page_config(page_title="Gujarati Survey Sequencer", page_icon="📑", layout="wide")
+
+# ---------------------------- UI THEME (DESIGN ONLY) ----------------------------
+CUSTOM_CSS = """
+<style>
+:root { --navy:#102A43; --blue:#2563EB; --teal:#0F766E; --ink:#1E293B; --muted:#64748B; --line:#E2E8F0; --surface:#FFFFFF; }
+.stApp { background: linear-gradient(180deg, #F2F7FC 0%, #F8FAFC 260px, #F8FAFC 100%); color:var(--ink); }
+.block-container { max-width: 1220px; padding-top: 1.65rem; padding-bottom: 3rem; }
+[data-testid="stHeader"] { background: transparent; }
+.hero { background:linear-gradient(125deg,#102A43 0%,#164E63 55%,#0F766E 100%); border-radius:22px; padding:26px 30px; color:#fff; box-shadow:0 12px 30px rgba(15,42,67,.13); margin-bottom:22px; }
+.hero h1 { color:#fff !important; font-size:2rem !important; line-height:1.2; margin:0 0 8px 0; font-weight:750; }
+.hero p { color:#D9EAF2 !important; margin:0; font-size:1rem; }
+.hero-badge { display:inline-block; background:rgba(255,255,255,.13); border:1px solid rgba(255,255,255,.23); border-radius:999px; padding:5px 11px; margin-bottom:12px; font-size:.78rem; letter-spacing:.04em; }
+.section-card { background:#fff; border:1px solid #E3EAF2; border-radius:18px; padding:18px 20px 12px; box-shadow:0 4px 14px rgba(15,42,67,.035); margin-bottom:14px; }
+.section-head { display:flex; align-items:center; gap:11px; margin-bottom:12px; }
+.step-pill { width:34px; height:34px; display:flex; align-items:center; justify-content:center; background:#E8F2FF; color:#1D4ED8; border-radius:11px; font-weight:800; }
+.section-head h3 { margin:0; color:#102A43; font-size:1.15rem; }
+.section-head small { color:#64748B; }
+div[data-testid="stFileUploader"] { border:1.5px dashed #B8C9DB; background:#F8FBFF; border-radius:15px; padding:12px; }
+div[data-testid="stTextArea"] textarea { border-radius:12px !important; background:#FBFDFF !important; font-family:ui-monospace, SFMono-Regular, Menlo, monospace !important; }
+.stButton button, .stDownloadButton button { border-radius:12px !important; font-weight:700 !important; min-height:46px; }
+.stDownloadButton button[kind="primary"] { background:linear-gradient(90deg,#0F766E,#0D9488) !important; border:0 !important; color:white !important; box-shadow:0 5px 14px rgba(13,148,136,.18); }
+.stDownloadButton button[kind="primary"]:hover { background:#115E59 !important; }
+div[data-testid="stMetric"] { background:#fff; border:1px solid #E2E8F0; border-radius:14px; padding:12px 15px; box-shadow:0 3px 10px rgba(15,42,67,.025); }
+div[data-testid="stMetricLabel"] { color:#64748B; }
+div[data-testid="stMetricValue"] { color:#102A43; }
+div[data-testid="stAlert"] { border-radius:13px; }
+hr { border-color:#E2E8F0; }
+.footer { text-align:center; color:#94A3B8; font-size:.8rem; padding-top:20px; }
+@media(max-width:700px){ .hero {padding:21px 19px;} .hero h1 {font-size:1.55rem !important;} .section-card {padding:14px;} }
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
 st.markdown(
-    "Reads **only the current `બ્લોક સરવે નંબર` field** (not જૂનો બ્લોક/સરવે નંબર, " 
-    "not other numbers), then creates a new PDF containing only requested survey pages "
-    "in the exact order of your list."
+    """
+    <div class="hero">
+      <span class="hero-badge">PDF AUTOMATION · LAND RECORDS</span>
+      <h1>Gujarati Survey PDF Sequencer</h1>
+      <p>Find only the current <b>બ્લોક સરવે નંબર</b> field, arrange matching pages in your exact list order, and download a clean PDF.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
+
 
 GUJ_DIGITS = str.maketrans("૦૧૨૩૪૫૬૭૮૯", "0123456789")
 
@@ -26,7 +64,7 @@ def canonical_survey(text: str) -> str:
     """Normalize a survey value only; preserve sub-number separators as slash."""
     text = normalize_digits(text).lower()
     text = text.replace("પૈકી", "/").replace("paiki", "/")
-    text = re.sub(r"\\s*[/.-]\\s*", "/", text)
+    text = re.sub(r"\s*[/.-]\s*", "/", text)
     text = re.sub(r"[^0-9/]", "", text)
     text = re.sub(r"/+$", "", text)
     return text
@@ -102,17 +140,30 @@ def run_ocr(image, pytesseract):
     return "\n".join(attempts), ""
 
 
-pdf_upload = st.file_uploader("Upload the original PDF", type=["pdf"])
-sequence_input = st.text_area(
-    "Survey number sequence (one per line; Gujarati or English digits; order preserved)",
-    height=230,
-    placeholder="૧૬૨\n૧૬૪\n૧૬૫\n૧૬૯\n૧૭૪\n...",
-)
-ocr_on = st.checkbox("Gujarati OCR fallback (for scanned PDFs)", value=True)
+# ------------------------------- MAIN WORKFLOW --------------------------------
+left, right = st.columns([1.05, 1], gap="large")
+with left:
+    st.markdown('<div class="section-card"><div class="section-head"><div class="step-pill">1</div><div><h3>Upload original PDF</h3><small>Choose the source land-record PDF</small></div></div>', unsafe_allow_html=True)
+    pdf_upload = st.file_uploader("Source PDF", type=["pdf"], label_visibility="collapsed")
+    if pdf_upload:
+        st.caption(f"📄 {pdf_upload.name} · {pdf_upload.size/1024:,.0f} KB")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with right:
+    st.markdown('<div class="section-card"><div class="section-head"><div class="step-pill">2</div><div><h3>Paste survey sequence</h3><small>One number per line; order is preserved</small></div></div>', unsafe_allow_html=True)
+    sequence_input = st.text_area(
+        "Survey sequence", height=210, label_visibility="collapsed",
+        placeholder="૧૬૨\n૧૬૪\n૧૬૫\n૧૬૯\n૧૭૪\n…",
+    )
+    st.caption("Gujarati or English digits supported · duplicate entries preserved")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown('<div class="section-card"><div class="section-head"><div class="step-pill">3</div><div><h3>Processing settings</h3><small>OCR fallback for scanned/image PDFs</small></div></div>', unsafe_allow_html=True)
+ocr_on = st.checkbox("Enable Gujarati OCR fallback", value=True, help="Use Gujarati+English OCR if embedded PDF text does not identify the current survey-number field.")
+st.markdown("</div>", unsafe_allow_html=True)
 
 if pdf_upload and sequence_input.strip():
     requested = parse_sequence(sequence_input)
-    st.caption(f"Parsed sequence: {len(requested)} items. Duplicates are preserved.")
     try:
         source_doc = fitz.open(stream=pdf_upload.getvalue(), filetype="pdf")
     except Exception as exc:
@@ -130,7 +181,8 @@ if pdf_upload and sequence_input.strip():
 
     detected = []
     diagnostics = []
-    prog = st.progress(0, text="Reading current Block Survey Number field only…")
+    st.markdown('<div class="section-card"><div class="section-head"><div class="step-pill">4</div><div><h3>Detection & results</h3><small>Reading only the current Block Survey Number field</small></div></div>', unsafe_allow_html=True)
+    prog = st.progress(0, text="Reading target survey field only…")
     for page_index, page in enumerate(source_doc):
         text_page = page.get_text("text") or ""
         survey = get_value_after_label(text_page)
@@ -162,8 +214,6 @@ if pdf_upload and sequence_input.strip():
         prog.progress((page_index + 1) / max(1, len(source_doc)), text=f"Checking page {page_index+1}/{len(source_doc)}")
     prog.empty()
 
-    # Master list order is authoritative. A PDF page can be used only once; duplicates in
-    # the master list are retained if there are multiple pages carrying the same number.
     matches, missing, used_pages = [], [], set()
     for survey in requested:
         page_i = next((i for i, found in enumerate(detected) if i not in used_pages and canonical_survey(found or "") == survey), None)
@@ -173,22 +223,24 @@ if pdf_upload and sequence_input.strip():
             used_pages.add(page_i)
             matches.append((survey, page_i))
 
-    st.subheader("Matching summary")
-    st.write(f"Requested: **{len(requested)}** · Matched pages: **{len(matches)}** · Not found: **{len(missing)}**")
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown('<div class="section-card"><div class="section-head"><div class="step-pill">5</div><div><h3>Sequenced PDF</h3><small>Only matched pages · exact master-list order</small></div></div>', unsafe_allow_html=True)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Requested numbers", len(requested))
+    m2.metric("Matched pages", len(matches))
+    m3.metric("Not found", len(missing))
     if missing:
-        st.warning("Not found in the current Block Survey Number field: " + ", ".join(missing))
-    with st.expander("Page-by-page target-field diagnostics", expanded=(not matches)):
+        st.warning("Not found in the current `બ્લોક સરવે નંબર` field: " + ", ".join(missing))
+    with st.expander("Page-by-page detection diagnostics", expanded=(not matches)):
         st.dataframe(pd.DataFrame(diagnostics), use_container_width=True, hide_index=True)
 
-    # The PDF output button is always shown; when no pages match, it is disabled with an
-    # explicit explanation, not replaced by a CSV-only download.
     if matches:
         output = fitz.open()
         for survey, page_i in matches:
             output.insert_pdf(source_doc, from_page=page_i, to_page=page_i)
         output_bytes = output.tobytes(garbage=4, deflate=True)
         output.close()
-        st.success(f"Created sequenced PDF: {len(matches)} pages. Extra pages excluded; requested order preserved.")
+        st.success(f"Ready: {len(matches)} sequenced pages. Extra pages excluded; requested order preserved.")
         st.download_button(
             "⬇️ DOWNLOAD SEQUENCED PDF",
             data=output_bytes,
@@ -198,10 +250,15 @@ if pdf_upload and sequence_input.strip():
             use_container_width=True,
         )
         report = pd.DataFrame([{"Requested Survey": s, "Original PDF Page": p + 1} for s, p in matches])
-        st.download_button("Optional match report (CSV)", data=report.to_csv(index=False).encode("utf-8-sig"), file_name="survey_match_report.csv", mime="text/csv")
+        st.download_button("Download optional match report (CSV)", data=report.to_csv(index=False).encode("utf-8-sig"), file_name="survey_match_report.csv", mime="text/csv")
     else:
         st.error("No pages matched the CURRENT `બ્લોક સરવે નંબર` field. The PDF download is unavailable until a match is found; CSV is only an optional diagnostic.")
         st.button("⬇️ DOWNLOAD SEQUENCED PDF", disabled=True, type="primary", use_container_width=True)
-        st.download_button("Optional diagnostics CSV", data=pd.DataFrame(diagnostics).to_csv(index=False).encode("utf-8-sig"), file_name="target_field_diagnostics.csv", mime="text/csv")
+        st.download_button("Download optional diagnostics CSV", data=pd.DataFrame(diagnostics).to_csv(index=False).encode("utf-8-sig"), file_name="target_field_diagnostics.csv", mime="text/csv")
+    st.markdown("</div>", unsafe_allow_html=True)
 else:
-    st.info("Upload a PDF and paste the sequence. The tool will read only the current `બ્લોક સરવે નંબર` field and create a PDF in your exact order.")
+    st.markdown('<div class="section-card"><div class="section-head"><div class="step-pill">4</div><div><h3>Ready when you are</h3><small>Upload a PDF and paste your sequence to start</small></div></div>', unsafe_allow_html=True)
+    st.info("Your source PDF is kept as the input. The final file will contain only matching survey pages, in your exact requested order.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown('<div class="footer">Gujarati Survey PDF Sequencer · Current survey field only · Extra pages excluded</div>', unsafe_allow_html=True)
