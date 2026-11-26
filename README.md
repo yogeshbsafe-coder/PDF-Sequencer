@@ -30,3 +30,5 @@ This is a design refresh of the v4 code. The underlying matching/OCR logic is un
 - Normalizes Gujarati digits and `પૈકી`/`paiki` hierarchy to slash paths (e.g. `306/પૈકી 1/પૈકી 1` → `306/1/1`).
 - Extracts multiple nested sub-number levels from the current `બ્લોક સરવે નંબર` field; main survey and each paiki subdivision are matched separately.
 - Keeps the pasted order and duplicate list entries; extra PDF pages remain excluded.
+
+https://pdf-survey-sequencer-2026.streamlit.app/?utm_source=chatgpt.com
